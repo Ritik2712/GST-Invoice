@@ -42,6 +42,8 @@ cp .env.example .env
 | `SHOPIFY_CLIENT_ID` | yes | the app's client ID |
 | `SHOPIFY_CLIENT_SECRET` | yes | the app's client secret; server-side only |
 | `SHOPIFY_API_VERSION` | no | defaults to `2025-07` |
+| `MONGODB_URI` | on Vercel | MongoDB connection string; without it data is stored as JSON files under `./data`. Server-only - never prefix it `NEXT_PUBLIC_` |
+| `MONGODB_DB` | no | database name, defaults to `gst_invoice` |
 | `SHOPIFY_ADMIN_ACCESS_TOKEN` | no | legacy fallback: a static `shpat_…` token, used only when no client credentials are set |
 | `NEXT_PUBLIC_SHOPIFY_API_KEY` | no | only for running embedded (see below) |
 | `APP_SHARED_SECRET` | no | if set, every request needs `?k=<secret>` once |
@@ -87,20 +89,54 @@ server-side, so Chrome's storage partitioning and Safari ITP cannot break it in 
 
 ## How it works
 
-### Data (`./data`, gitignored)
+### Storage
 
-```
-settings.json            seller details and invoice config
-counter.json             { "2026-27": 106 }  financial year -> last issued number
-hsn-rates.json           rate rules, seeded on first run, meant to be edited
-invoices/<number>.json   immutable snapshot, one per issued invoice
-invoices/_index.json     order id -> invoice pointer (derived; rebuilt if deleted)
+`lib/store.ts` is the only persistence entry point. The backend behind it is chosen from the
+environment:
+
+| `MONGODB_URI` | Backend | Use it for |
+| --- | --- | --- |
+| set | **MongoDB** (`lib/storage/mongo.ts`) | Vercel, or any host with more than one server instance |
+| not set | JSON files under `./data` (`lib/storage/file.ts`) | local development and tests |
+
+On Vercel without `MONGODB_URI` the app refuses to start writing - its filesystem is read-only
+and per-instance, so a file register would fail or hand out duplicate numbers.
+
+MongoDB collections: `settings`, `rate_tables`, `counters`, `invoices` (the `_id` of an invoice is
+its URL-safe key, e.g. `INV_26-27_10`). The numbering guarantees are enforced by the database,
+not by the server process:
+
+- issuing is **one transaction** - counter claim, PDF render and snapshot insert commit together
+  or not at all, so a failure never burns a number;
+- the counter document is written first, so a concurrent issue on another instance conflicts and
+  is retried after the first commits;
+- a **unique index on (financialYear, sequence)** makes a duplicate number unstorable.
+
+**Moving from files to MongoDB** (one-off):
+
+```bash
+npm run migrate:mongodb              # dry run: shows what would be copied
+npm run migrate:mongodb -- --apply   # copies, then verifies every document read back
 ```
 
-Every read and write goes through `lib/store.ts`. Writes are atomic (temp file + rename)
-and serialised through a named in-process mutex (`lib/mutex.ts`), so two simultaneous
-requests cannot interleave a read-modify-write. Replacing JSON with Prisma later means
-reimplementing that one module; no caller changes.
+It refuses to write into a database that already holds invoices or counters, and leaves
+`./data` untouched as a backup.
+
+**Tests.** `npm test` runs the file backend only, with no network. To prove the guarantees
+against a real MongoDB (including concurrent issues with transactions alone), point
+`TEST_MONGODB_URI` at a cluster: each run uses a throwaway `gst_invoice_test_*` database and
+drops it afterwards; the test helpers refuse to wipe any other database.
+
+```bash
+TEST_MONGODB_URI="mongodb+srv://..." npx vitest run lib/storage/mongo.test.ts
+```
+
+**Capacity.** A 1-item invoice (item + delivery line) is about 2.4 KB of BSON plus ~0.2 KB of
+index entries; each extra line adds ~0.46 KB. A 512 MB free cluster therefore holds roughly
+200,000 such invoices (about 150,000 with 3 items each). Cancelled invoices count too - they
+are kept for ever - and the quota is shared with every other database on the cluster. A logo is
+copied into each snapshot, so upload one only after it is stored once and referenced: a 60 KB
+logo alone would make every invoice ~83 KB.
 
 ### Invoice numbering
 

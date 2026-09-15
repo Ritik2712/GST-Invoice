@@ -23,7 +23,8 @@ export function errorResponse(error: unknown): NextResponse<ApiErrorBody> {
     return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
   }
   if (error instanceof StoreError) {
-    return NextResponse.json({ error: error.message, code: error.code }, { status: 409 })
+    const unavailable = error.code === 'DB_UNAVAILABLE' || error.code === 'STORAGE_NOT_CONFIGURED'
+    return NextResponse.json({ error: error.message, code: error.code }, { status: unavailable ? 503 : 409 })
   }
   if (error instanceof ShopifyApiError) {
     return NextResponse.json({ error: error.message, code: 'SHOPIFY' }, { status: 502 })

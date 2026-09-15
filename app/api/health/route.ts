@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { ConfigError, getShopifyConfig } from '@/lib/env'
 import { adminGraphql, ShopifyApiError } from '@/lib/shopify/client'
 import { getAccessToken, getTokenStatus } from '@/lib/shopify/token'
+import * as store from '@/lib/store'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,8 +73,23 @@ export async function GET(request: NextRequest) {
     )
   }
 
+  const storage = await store.checkStorage()
+  if (!storage.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        status: 'STORAGE_ERROR',
+        shopDomain,
+        apiVersion,
+        storage,
+        hint: 'Check MONGODB_URI and MONGODB_DB, and that this server\'s IP is allowed in the database\'s network access list.',
+      },
+      { status: 503 },
+    )
+  }
+
   if (request.nextUrl.searchParams.get('quick') === '1') {
-    return NextResponse.json({ ok: true, status: 'CONFIGURED', shopDomain, apiVersion, auth: { mode }, checks: {} })
+    return NextResponse.json({ ok: true, status: 'CONFIGURED', shopDomain, apiVersion, auth: { mode }, storage, checks: {} })
   }
 
   try {
@@ -113,6 +129,7 @@ export async function GET(request: NextRequest) {
       shopDomain,
       apiVersion,
       auth,
+      storage,
       missingScopes,
       checks: { read_orders: orders, read_products: products },
       ...(ok

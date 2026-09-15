@@ -18,12 +18,15 @@ let store: typeof import('./store')
 beforeEach(async () => {
   dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'gst-store-'))
   vi.spyOn(process, 'cwd').mockReturnValue(dataRoot)
+  vi.stubEnv('MONGODB_URI', '')
+  vi.stubEnv('VERCEL', '')
   vi.resetModules()
   store = await import('./store')
 })
 
 afterEach(async () => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   await fs.rm(dataRoot, { recursive: true, force: true })
 })
 

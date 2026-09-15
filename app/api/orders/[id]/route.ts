@@ -66,7 +66,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
       }
     })
 
-    const history = (await store.getInvoicesByOrderId()).get(order.id) ?? []
+    const history = (await store.getInvoicesByOrderId([order.id])).get(order.id) ?? []
 
     return NextResponse.json({
       order,

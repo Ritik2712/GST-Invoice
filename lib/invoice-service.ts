@@ -208,7 +208,7 @@ export async function reconcileCancellation(invoice: InvoiceSnapshot): Promise<I
 
 /** Bulk version used when rendering the Orders table. */
 export async function reconcileCancellations(orders: NormalizedOrder[]): Promise<void> {
-  const index = await store.getInvoicesByOrderId()
+  const index = await store.getInvoicesByOrderId(orders.map((order) => order.id))
   for (const order of orders) {
     if (!order.cancelledAt) continue
     const entry = store.activeEntry(index.get(order.id))

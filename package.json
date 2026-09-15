@@ -9,12 +9,14 @@
     "start": "next start -p 3100",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate:mongodb": "tsx scripts/migrate-to-mongodb.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.3.0",
     "@shopify/polaris": "^13.9.5",
     "@shopify/polaris-icons": "^9.3.1",
+    "mongodb": "^7.6.0",
     "next": "^15.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
@@ -23,6 +25,7 @@
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.8.3",
     "vitest": "^3.1.0"
   }

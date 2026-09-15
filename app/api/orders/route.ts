@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     // Orders cancelled since the last look get their stored invoice flagged.
     await reconcileCancellations(page.orders)
 
-    const invoices = await store.getInvoicesByOrderId()
+    const invoices = await store.getInvoicesByOrderId(page.orders.map((order) => order.id))
     const settingsComplete = isSettingsComplete(settings)
 
     const rows = page.orders.map((order) =>

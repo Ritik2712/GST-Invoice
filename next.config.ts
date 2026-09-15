@@ -2,7 +2,7 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   // @react-pdf/renderer and its font/stream dependencies must stay CommonJS on the server.
-  serverExternalPackages: ['@react-pdf/renderer'],
+  serverExternalPackages: ['@react-pdf/renderer', 'mongodb'],
   async headers() {
     return [
       {
