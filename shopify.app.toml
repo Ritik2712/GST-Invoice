@@ -1,0 +1,22 @@
+# Only needed if you run `shopify app dev` to get a tunnel and an embedded admin UI.
+# A custom app created in Admin -> Settings -> Apps -> Develop apps does not use this file;
+# in that case run `npm run dev` and open http://localhost:3000 directly.
+
+name = "gst-invoices"
+application_url = "https://example.trycloudflare.com"
+embedded = true
+
+[access_scopes]
+# read_all_orders is an ADD-ON to read_orders, not a substitute: without read_orders there
+# is no order access at all. It lifts the 60-day window and Shopify gates it, so drop it
+# if the install is refused - the app works fine on read_orders alone.
+scopes = "read_orders,read_all_orders,read_products"
+
+[auth]
+redirect_urls = [ "https://example.trycloudflare.com/api/auth" ]
+
+[webhooks]
+api_version = "2025-07"
+
+[build]
+include_config_on_deploy = true

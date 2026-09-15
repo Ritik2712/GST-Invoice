@@ -1,0 +1,8 @@
+/*
+ * <ui-nav-menu> is an App Bridge custom element. Inside the Shopify admin it is consumed
+ * by App Bridge and rendered as the app's section nav; standalone it is an unknown element
+ * whose <a> children would otherwise show up as loose links at the top of the page.
+ */
+ui-nav-menu {
+  display: none;
+}
