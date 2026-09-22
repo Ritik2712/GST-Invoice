@@ -228,6 +228,7 @@ export interface InvoiceSnapshot {
   seller: SellerProfile & {
     bank?: { bankName?: string; accountName?: string; accountNumber?: string; ifsc?: string }
     logoDataUri?: string | null
+    invoiceTitle?: string
   }
 
   buyer: {

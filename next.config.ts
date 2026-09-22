@@ -2,7 +2,12 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   // @react-pdf/renderer and its font/stream dependencies must stay CommonJS on the server.
-  serverExternalPackages: ['@react-pdf/renderer', 'mongodb'],
+  serverExternalPackages: ['@react-pdf/renderer', 'pdfkit', 'mongodb'],
+  // PDFKit loads its built-in fonts through package export paths at runtime. Vercel's
+  // output tracing does not always discover those dynamically resolved files.
+  outputFileTracingIncludes: {
+    '/*': ['./node_modules/pdfkit/js/standard-fonts/**/*'],
+  },
   async headers() {
     return [
       {

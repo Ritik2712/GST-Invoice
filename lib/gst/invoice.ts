@@ -133,6 +133,7 @@ export function buildInvoice(args: BuildInvoiceArgs): InvoiceSnapshot {
       pan: settings.pan || undefined,
       bank: settings.bank,
       logoDataUri: settings.logoDataUri,
+      invoiceTitle: settings.invoiceTitle.trim() || 'INVOICE RECEIPT',
     },
 
     buyer: {

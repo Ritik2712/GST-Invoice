@@ -83,7 +83,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   shippingTreatment: 'SEPARATE_SERVICE',
   shippingHsn: '',
   deliveryLineLabel: 'Delivery charges',
-  invoiceTitle: 'TAX INVOICE',
+  invoiceTitle: 'INVOICE RECEIPT',
 }
 
 export type SettingsErrors = Partial<Record<keyof AppSettings, string>>
