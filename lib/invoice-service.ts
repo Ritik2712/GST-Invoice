@@ -1,5 +1,5 @@
 import { financialYearKeyIst } from './gst/fy'
-import { buildInvoice, checkInvoiceability } from './gst/invoice'
+import { buildInvoice, checkInvoiceability, prefixFor, seriesFor } from './gst/invoice'
 import { formatInvoiceNumber } from './gst/numbering'
 import { isSettingsComplete, type AppSettings } from './gst/settings'
 import type { InvoiceSnapshot, NormalizedOrder, RateTable } from './gst/types'
@@ -70,7 +70,7 @@ export async function getOrIssueInvoice(orderId: string): Promise<IssueResult> {
     throw new InvoiceError('Order not found in Shopify', 'ORDER_NOT_FOUND', 404)
   }
 
-  const check = checkInvoiceability(order, isSettingsComplete(settings), settings.allowTestOrderInvoices)
+  const check = checkInvoiceability(order, isSettingsComplete(settings))
   if (!check.invoiceable) {
     throw new InvoiceError(check.message, check.reason, 409)
   }
@@ -78,15 +78,18 @@ export async function getOrIssueInvoice(orderId: string): Promise<IssueResult> {
   const issuedAt = new Date()
   const financialYear = financialYearKeyIst(issuedAt)
   const rateTable = effectiveRateTable(rawTable, settings)
+  // A Shopify test order gets a number from the TEST series, never from the real one.
+  const series = seriesFor(order)
 
   let pdf: Buffer | null = null
 
-  const invoice = await store.issueInvoice(financialYear, async (sequence) => {
+  const invoice = await store.issueInvoice(series, financialYear, async (sequence) => {
     const snapshot = buildInvoice({
       order,
       settings,
       rateTable,
-      invoiceNumber: formatInvoiceNumber(settings.invoicePrefix, financialYear, sequence),
+      series,
+      invoiceNumber: formatInvoiceNumber(prefixFor(series, settings), financialYear, sequence),
       financialYear,
       sequence,
       issuedAt,
@@ -96,8 +99,8 @@ export async function getOrIssueInvoice(orderId: string): Promise<IssueResult> {
     return snapshot
   })
 
-  // Keep the display copy of the counter in Settings in step with the real counter.
-  await syncSettingsCounter(settings, invoice.sequence)
+  // Settings shows the real series only, so a test invoice must not move it.
+  if (series === 'REAL') await syncSettingsCounter(settings, invoice.sequence)
 
   return { invoice, pdf: pdf!, created: true }
 }
@@ -135,18 +138,20 @@ export async function previewInvoiceForOrder(
     ? { ...stored, shippingTreatment: overrides.shippingTreatment }
     : stored
 
-  const check = checkInvoiceability(order, isSettingsComplete(settings), settings.allowTestOrderInvoices)
+  const check = checkInvoiceability(order, isSettingsComplete(settings))
   if (!check.invoiceable) throw new InvoiceError(check.message, check.reason, 409)
 
   const issuedAt = new Date()
   const financialYear = financialYearKeyIst(issuedAt)
-  const sequence = (await store.getLastIssued(financialYear)) + 1
+  const series = seriesFor(order)
+  const sequence = (await store.getLastIssued(series, financialYear)) + 1
 
   const invoice = buildInvoice({
     order,
     settings,
     rateTable: effectiveRateTable(rawTable, settings),
-    invoiceNumber: formatInvoiceNumber(settings.invoicePrefix, financialYear, sequence),
+    series,
+    invoiceNumber: formatInvoiceNumber(prefixFor(series, settings), financialYear, sequence),
     financialYear,
     sequence,
     issuedAt,

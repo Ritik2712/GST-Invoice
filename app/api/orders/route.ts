@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
     const settingsComplete = isSettingsComplete(settings)
 
     const rows = page.orders.map((order) =>
-      toOrderRow(order, invoices.get(order.id), settingsComplete, settings.allowTestOrderInvoices),
+      toOrderRow(order, invoices.get(order.id), settingsComplete),
     )
     // Scopes arrive with a client-credentials token; a static token does not report them.
     const token = getTokenStatus()

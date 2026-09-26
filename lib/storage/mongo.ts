@@ -2,10 +2,11 @@ import { MongoClient, MongoServerError, type Db } from 'mongodb'
 
 import { invoiceFileKey } from '../gst/numbering'
 import type { AppSettings } from '../gst/settings'
-import type { InvoiceSnapshot, RateTable } from '../gst/types'
+import type { InvoiceSeries, InvoiceSnapshot, RateTable } from '../gst/types'
 import { withLock } from '../mutex'
 import { DEFAULT_RATE_TABLE } from '../seed/rate-table'
 import {
+  counterKey,
   mergeSettings,
   StoreError,
   toIndexEntry,
@@ -63,8 +64,16 @@ export interface MongoExtras {
   registerCounts(): Promise<{ invoices: number; counters: number }>
   /** Migration only: store an already-issued snapshot exactly as it is. */
   importSnapshot(snapshot: InvoiceSnapshot): Promise<void>
-  /** Migration only: set a financial year's counter. */
-  importCounter(financialYear: string, seq: number): Promise<void>
+  /** Migration only: set a counter by its raw id (see counterKey). */
+  importCounter(counterId: string, seq: number): Promise<void>
+  /** Migration only: remove a counter entirely. */
+  deleteCounter(counterId: string): Promise<void>
+  /**
+   * Migration only: give an invoice a new number. The number is the document id, so this
+   * removes and reinserts inside one transaction - the register never shows both or
+   * neither, and the unique index still rejects a clash.
+   */
+  renumberInvoice(oldInvoiceNumber: string, updated: InvoiceSnapshot): Promise<void>
   /** Test only: empty every collection. Refuses unless the database is a test database. */
   resetForTests(): Promise<void>
   /** Test only: drop every collection. Refuses unless the database is a test database. */
@@ -95,6 +104,7 @@ function withoutId<T extends { _id: unknown }>(doc: T): Omit<T, '_id'> {
 const INDEX_PROJECTION = {
   _id: 0,
   invoiceNumber: 1,
+  series: 1,
   'order.id': 1,
   'order.name': 1,
   financialYear: 1,
@@ -107,8 +117,14 @@ const INDEX_PROJECTION = {
 
 async function ensureIndexes(db: Db): Promise<void> {
   const invoices = db.collection(COLLECTIONS.invoices)
+  // Superseded by the series-aware index below; dropped so a REAL and a TEST invoice can
+  // share a sequence number without colliding.
+  await invoices.dropIndex('unique_number_per_fy').catch(() => false)
   await Promise.all([
-    invoices.createIndex({ financialYear: 1, sequence: 1 }, { unique: true, name: 'unique_number_per_fy' }),
+    invoices.createIndex(
+      { series: 1, financialYear: 1, sequence: 1 },
+      { unique: true, name: 'unique_number_per_series_fy' },
+    ),
     invoices.createIndex({ 'order.id': 1, issuedAt: 1 }, { name: 'by_order' }),
     invoices.createIndex({ issuedAt: -1 }, { name: 'by_issued_at' }),
   ])
@@ -164,11 +180,14 @@ export function createMongoBackend(options: MongoBackendOptions): MongoBackend {
 
   async function highestSequence(
     invoices: Awaited<ReturnType<typeof collections>>['invoices'],
+    series: InvoiceSeries,
     financialYear: string,
     session?: import('mongodb').ClientSession,
   ): Promise<number> {
+    // A snapshot written before series existed has no field; those are REAL.
+    const seriesFilter = series === 'REAL' ? { $in: ['REAL', null] } : series
     const top = await invoices
-      .find({ financialYear }, { session })
+      .find({ financialYear, series: seriesFilter } as Record<string, unknown>, { session })
       .sort({ sequence: -1 })
       .limit(1)
       .project<{ sequence: number }>({ _id: 0, sequence: 1 })
@@ -213,24 +232,24 @@ export function createMongoBackend(options: MongoBackendOptions): MongoBackend {
       return Object.fromEntries(docs.map((d) => [d._id, d.seq])) as Counter
     },
 
-    async getLastIssued(financialYear) {
+    async getLastIssued(series, financialYear) {
       const { counters } = await collections()
-      return (await counters.findOne({ _id: financialYear }))?.seq ?? 0
+      return (await counters.findOne({ _id: counterKey(series, financialYear) }))?.seq ?? 0
     },
 
-    async setLastIssued(financialYear, value) {
+    async setLastIssued(series, financialYear, value) {
       const { client, counters, invoices } = await collections()
       const session = client.startSession()
       try {
         await session.withTransaction(async () => {
-          const issued = await highestSequence(invoices, financialYear, session)
+          const issued = await highestSequence(invoices, series, financialYear, session)
           if (value < issued) {
             throw new StoreError(
               `Invoice ${financialYear}/${issued} has already been issued; the counter cannot be set below ${issued}.`,
               'COUNTER_TOO_LOW',
             )
           }
-          await counters.updateOne({ _id: financialYear }, { $set: { seq: value } }, { upsert: true, session })
+          await counters.updateOne({ _id: counterKey(series, financialYear) }, { $set: { seq: value } }, { upsert: true, session })
         })
         return value
       } finally {
@@ -272,7 +291,7 @@ export function createMongoBackend(options: MongoBackendOptions): MongoBackend {
       return doc ? (withoutId(doc) as InvoiceSnapshot) : null
     },
 
-    async issueInvoice(financialYear, produce) {
+    async issueInvoice(series, financialYear, produce) {
       const run = async (): Promise<InvoiceSnapshot> => {
         const { client, counters, invoices } = await collections()
         const session = client.startSession()
@@ -283,17 +302,17 @@ export function createMongoBackend(options: MongoBackendOptions): MongoBackend {
               // Claim the counter first: this write locks the document for the rest of the
               // transaction, so a concurrent issue anywhere waits its turn via a retry.
               const claimed = await counters.findOneAndUpdate(
-                { _id: financialYear },
+                { _id: counterKey(series, financialYear) },
                 { $inc: { seq: 1 } },
                 { upsert: true, returnDocument: 'after', session },
               )
               let next = claimed?.seq ?? 1
 
               // Never behind the register, e.g. after a manual edit of the counter.
-              const top = await highestSequence(invoices, financialYear, session)
+              const top = await highestSequence(invoices, series, financialYear, session)
               if (top >= next) {
                 next = top + 1
-                await counters.updateOne({ _id: financialYear }, { $set: { seq: next } }, { session })
+                await counters.updateOne({ _id: counterKey(series, financialYear) }, { $set: { seq: next } }, { session })
               }
 
               const snapshot = await produce(next)
@@ -363,9 +382,38 @@ export function createMongoBackend(options: MongoBackendOptions): MongoBackend {
       }
     },
 
-    async importCounter(financialYear, seq) {
+    async importCounter(counterId, seq) {
       const { counters } = await collections()
-      await counters.updateOne({ _id: financialYear }, { $set: { seq } }, { upsert: true })
+      await counters.updateOne({ _id: counterId }, { $set: { seq } }, { upsert: true })
+    },
+
+    async deleteCounter(counterId) {
+      const { counters } = await collections()
+      await counters.deleteOne({ _id: counterId })
+    },
+
+    async renumberInvoice(oldInvoiceNumber, updated) {
+      const { client, invoices } = await collections()
+      const oldId = invoiceFileKey(oldInvoiceNumber)
+      const newId = invoiceFileKey(updated.invoiceNumber)
+      const session = client.startSession()
+      try {
+        await session.withTransaction(async () => {
+          const existing = await invoices.findOne({ _id: oldId }, { session })
+          if (!existing) throw new StoreError(`Invoice ${oldInvoiceNumber} not found`, 'INVOICE_NOT_FOUND')
+          if (newId !== oldId) await invoices.deleteOne({ _id: oldId }, { session })
+          try {
+            await invoices.insertOne({ ...updated, _id: newId }, { session })
+          } catch (error) {
+            if (isDuplicateKey(error)) {
+              throw new StoreError(`Invoice ${updated.invoiceNumber} already exists`, 'INVOICE_EXISTS')
+            }
+            throw error
+          }
+        })
+      } finally {
+        await session.endSession()
+      }
     },
 
     async resetForTests() {

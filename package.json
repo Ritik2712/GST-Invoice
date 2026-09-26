@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "migrate:mongodb": "tsx scripts/migrate-to-mongodb.ts"
+    "migrate:mongodb": "tsx scripts/migrate-to-mongodb.ts",
+    "renumber:test": "tsx scripts/renumber-test-invoices.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.3.0",

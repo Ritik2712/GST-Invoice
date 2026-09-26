@@ -213,9 +213,18 @@ export interface NormalizedOrder {
 
 export type InvoiceStatus = 'ISSUED' | 'CANCELLED'
 
+/**
+ * Which numbering series an invoice belongs to. Shopify test orders are not supplies, so
+ * they get their own series with its own counter: a test invoice can never take a number
+ * out of the real series, and the two are told apart at a glance by their prefix.
+ */
+export type InvoiceSeries = 'REAL' | 'TEST'
+
 export interface InvoiceSnapshot {
   /** Snapshot schema version, so later readers can migrate old files. */
   schemaVersion: number
+  /** REAL for a genuine supply, TEST for an invoice raised on a Shopify test order. */
+  series: InvoiceSeries
   invoiceNumber: string
   financialYear: string
   sequence: number

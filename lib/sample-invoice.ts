@@ -62,6 +62,7 @@ export function buildSamplePreview(args: SamplePreviewArgs): SamplePreview {
       ...args.rateTable,
       fallback: { hsn: settings.defaultHsn || args.rateTable.fallback.hsn, rate: args.rateTable.fallback.rate },
     },
+    series: 'REAL',
     invoiceNumber: formatInvoiceNumber(settings.invoicePrefix, financialYear, args.lastIssued + 1),
     financialYear,
     sequence: args.lastIssued + 1,

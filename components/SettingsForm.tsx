@@ -27,6 +27,7 @@ import { INDIAN_STATES } from '@/lib/gst/states'
 interface SettingsPayload {
   settings: AppSettings
   financialYear: string
+  testLastIssuedNumber?: number
   rateTableVersion: number
   deliveryRate?: { rate: number; source: string }
 }
@@ -36,6 +37,7 @@ export function SettingsForm() {
   const [financialYear, setFinancialYear] = useState('')
   const [rateTableVersion, setRateTableVersion] = useState(0)
   const [deliveryRate, setDeliveryRate] = useState<SettingsPayload['deliveryRate']>()
+  const [testLastIssued, setTestLastIssued] = useState(0)
   const [errors, setErrors] = useState<SettingsErrors>({})
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -51,6 +53,7 @@ export function SettingsForm() {
         setFinancialYear(body.financialYear)
         setRateTableVersion(body.rateTableVersion)
         setDeliveryRate(body.deliveryRate)
+        setTestLastIssued(body.testLastIssuedNumber ?? 0)
       } catch {
         setError('Could not load settings')
         setSettings(DEFAULT_SETTINGS)
@@ -135,6 +138,11 @@ export function SettingsForm() {
     const query = placeOfSupply ? `?pos=${encodeURIComponent(placeOfSupply)}` : ''
     window.open(`/api/sample-invoice${query}`, '_blank', 'noopener')
   }, [])
+
+  const nextTestInvoiceNumber = useMemo(() => {
+    if (!settings || !financialYear) return ''
+    return `${settings.testInvoicePrefix}${shortFinancialYear(financialYear)}/${testLastIssued + 1}`
+  }, [settings, financialYear, testLastIssued])
 
   const nextInvoiceNumber = useMemo(() => {
     if (!settings || !financialYear) return ''
@@ -251,18 +259,24 @@ export function SettingsForm() {
                   min={0}
                 />
               </FormLayout.Group>
-              <InlineStack gap="200" blockAlign="center">
+              <TextField
+                label="Test invoice prefix"
+                autoComplete="off"
+                value={settings.testInvoicePrefix}
+                onChange={(value) => update('testInvoicePrefix', value)}
+                error={errors.testInvoicePrefix}
+                helpText="Shopify test orders are invoiced in their own series with its own counter, so a test can never take a number from the real one."
+              />
+              <InlineStack gap="200" blockAlign="center" wrap>
                 <Text as="span" tone="subdued">
-                  Financial year {financialYear}. Next invoice will be
+                  Financial year {financialYear}. Next real invoice
                 </Text>
                 <Badge tone="info">{nextInvoiceNumber}</Badge>
+                <Text as="span" tone="subdued">
+                  , next test invoice
+                </Text>
+                <Badge>{nextTestInvoiceNumber}</Badge>
               </InlineStack>
-              <Checkbox
-                label="Allow invoices for Shopify test orders"
-                checked={settings.allowTestOrderInvoices}
-                onChange={(value) => update('allowTestOrderInvoices', value)}
-                helpText="Off: a test order gets no invoice, so the series is never left with a number against a supply that never happened. Turn it on while trying the app out, and off before you go live."
-              />
               <Checkbox
                 label="Download immediately after generating"
                 checked={settings.autoDownloadAfterGenerate}

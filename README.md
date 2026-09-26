@@ -162,6 +162,42 @@ The **Last issued invoice number** field in Settings edits the counter directly 
 start the series mid-year or to correct it. It refuses to move below a number that has
 already been issued.
 
+### Test invoices and real invoices
+
+Shopify marks orders placed through a test gateway as test orders. Those are not supplies,
+so they get their **own numbering series** with its own counter:
+
+| Series | Used for | Number | Counter |
+| --- | --- | --- | --- |
+| `REAL` | genuine orders | `<invoicePrefix><FY>/<seq>`, e.g. `INV/26-27/1` | `2026-27` |
+| `TEST` | Shopify test orders | `<testInvoicePrefix><FY>/<seq>`, e.g. `TEST/26-27/1` | `TEST:2026-27` |
+
+The series is decided by the order, not by a setting: `seriesFor()` returns TEST when
+Shopify reports `test: true`. A test invoice therefore can never take a number out of the
+real series, and the real series stays gapless no matter how much testing happens. Both
+prefixes are in Settings, which refuses to let them be the same, and the screen shows the
+next number of each series.
+
+Everything else is identical - the same template, the same rates, the same immutability.
+Only the number differs, which is what makes a test invoice obvious at a glance.
+
+In the database the two series are kept apart by a unique index on
+`(series, financialYear, sequence)`, so `INV/26-27/1` and `TEST/26-27/1` can both exist and
+a duplicate within either series still cannot.
+
+**Moving old invoices into the TEST series.** If invoices were raised on test orders before
+the split existed:
+
+```bash
+npm run renumber:test              # dry run: lists every change
+npm run renumber:test -- --apply   # renumbers, then verifies
+```
+
+It checks each invoice's order against Shopify first and stops without changing anything if
+any invoice belongs to a real order - a real invoice must never be renumbered. Sequences are
+kept as they are, so only the number and the series change (`INV/26-27/4` -> `TEST/26-27/4`),
+and the real counter is reset so the first real invoice is number 1.
+
 ### Cancelling and reissuing
 
 An issued invoice cannot be edited - it is a frozen snapshot. To correct one (a wrong rate,
@@ -394,7 +430,7 @@ layout after changing `lib/pdf/InvoiceDocument.tsx`.
 | --- | --- | --- |
 | `GET` | `/api/orders` | paginated order rows with invoice status |
 | `GET` | `/api/orders/:id` | one order: raw Shopify payload, normalised order, GST decisions, invoice history |
-| `POST` | `/api/orders/:id/invoice` | issue the invoice (or return the existing one) |
+| `POST` | `/api/orders/:id/invoice` | issue the invoice (or return the existing one), in the series the order belongs to |
 | `GET` | `/api/orders/:id/invoice/preview` | dry run: the invoice that order would get, allots nothing (`?shipping=APPORTION` to compare treatments) |
 | `GET` | `/api/invoices` | issued invoices and the counter |
 | `GET` | `/api/invoices/:key` | the frozen snapshot |

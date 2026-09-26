@@ -17,6 +17,8 @@ export interface AppSettings {
   registeredAddress: string
   pan: string
   invoicePrefix: string
+  /** Prefix for invoices raised on Shopify test orders, so they are obvious on sight. */
+  testInvoicePrefix: string
   /** Mirrors counter.json for display; edits here rewrite the counter for the current FY. */
   lastIssuedNumber: number
   pricesIncludeGst: boolean
@@ -26,12 +28,6 @@ export interface AppSettings {
    * so a mis-click never dumps a file in your downloads folder.
    */
   autoDownloadAfterGenerate: boolean
-  /**
-   * Off by default: a Shopify test order gets no invoice, because burning a number on a
-   * supply that never happened leaves a hole in a series that has to be gapless. Turn it
-   * on deliberately while trying the app out, and turn it off before going live.
-   */
-  allowTestOrderInvoices: boolean
   defaultHsn: string
   bank: BankDetails
   terms: string
@@ -72,10 +68,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   registeredAddress: '',
   pan: '',
   invoicePrefix: 'INV/',
+  testInvoicePrefix: 'TEST/',
   lastIssuedNumber: 0,
   pricesIncludeGst: true,
   autoDownloadAfterGenerate: false,
-  allowTestOrderInvoices: false,
   defaultHsn: '',
   bank: { bankName: '', accountName: '', accountNumber: '', ifsc: '' },
   terms: '',
@@ -104,6 +100,13 @@ export function validateSettings(settings: AppSettings): SettingsErrors {
 
   const prefixError = validateInvoicePrefix(settings.invoicePrefix)
   if (prefixError) errors.invoicePrefix = prefixError
+
+  const testPrefixError = validateInvoicePrefix(settings.testInvoicePrefix)
+  if (testPrefixError) errors.testInvoicePrefix = testPrefixError
+  // Identical prefixes would make a test invoice indistinguishable from a real one.
+  else if (settings.testInvoicePrefix.trim() === settings.invoicePrefix.trim()) {
+    errors.testInvoicePrefix = 'Use a different prefix from the real invoice series'
+  }
 
   if (!Number.isInteger(settings.lastIssuedNumber) || settings.lastIssuedNumber < 0) {
     errors.lastIssuedNumber = 'Last issued number must be zero or a positive whole number'

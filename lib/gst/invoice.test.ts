@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildInvoice, checkInvoiceability } from './invoice'
+import { buildInvoice, checkInvoiceability, prefixFor, seriesFor } from './invoice'
 import { resolvePlaceOfSupply } from './placeOfSupply'
 import { DEFAULT_SETTINGS, validateSettings, type AppSettings } from './settings'
 import { stateFromShopifyAddress } from './states'
@@ -97,13 +97,8 @@ describe('invoiceability', () => {
     expect(checkInvoiceability(order({ financialStatus: 'PARTIALLY_PAID' }), true).invoiceable).toBe(true)
   })
 
-  it('refuses a Shopify test order by default', () => {
-    const result = checkInvoiceability(order({ isTest: true }), true)
-    expect(result).toMatchObject({ invoiceable: false, reason: 'TEST_ORDER' })
-  })
-
-  it('allows a test order only when explicitly enabled', () => {
-    expect(checkInvoiceability(order({ isTest: true }), true, true).invoiceable).toBe(true)
+  it('allows a test order - it goes to the test series instead of being refused', () => {
+    expect(checkInvoiceability(order({ isTest: true }), true).invoiceable).toBe(true)
   })
 
   it('refuses an order that is not paid', () => {
@@ -137,6 +132,7 @@ describe('buildInvoice', () => {
     order: order(),
     settings,
     rateTable,
+    series: 'REAL',
     invoiceNumber: 'AD/26-27/106',
     financialYear: '2026-27',
     sequence: 106,
@@ -181,6 +177,7 @@ describe('buildInvoice', () => {
       order: order(),
       settings,
       rateTable,
+      series: 'REAL',
       invoiceNumber: 'AD/26-27/107',
       financialYear: '2026-27',
       sequence: 107,
@@ -199,6 +196,7 @@ describe('the delivery line', () => {
       order: order({ shipping: { amount: 118, discount: 0, title: '.>(' } }),
       settings: { ...settings, ...overrides },
       rateTable,
+      series: 'REAL',
       invoiceNumber: 'AD/26-27/1',
       financialYear: '2026-27',
       sequence: 1,
@@ -229,6 +227,31 @@ describe('the delivery line', () => {
   })
 })
 
+describe('invoice series', () => {
+  it('sends a Shopify test order to the TEST series and a real one to REAL', () => {
+    expect(seriesFor(order({ isTest: true }))).toBe('TEST')
+    expect(seriesFor(order({ isTest: false }))).toBe('REAL')
+  })
+
+  it('prints each series with its own prefix', () => {
+    expect(prefixFor('REAL', settings)).toBe('AD/')
+    expect(prefixFor('TEST', { ...settings, testInvoicePrefix: 'TEST/' })).toBe('TEST/')
+  })
+
+  it('records the series on the snapshot', () => {
+    const args = {
+      order: order({ isTest: true }),
+      settings,
+      rateTable,
+      financialYear: '2026-27',
+      sequence: 1,
+      issuedAt: new Date('2026-09-12T06:00:00Z'),
+    }
+    expect(buildInvoice({ ...args, series: 'TEST', invoiceNumber: 'TEST/26-27/1' }).series).toBe('TEST')
+    expect(buildInvoice({ ...args, series: 'REAL', invoiceNumber: 'AD/26-27/1' }).series).toBe('REAL')
+  })
+})
+
 describe('settings validation', () => {
   it('accepts a complete profile', () => {
     expect(validateSettings(settings)).toEqual({})
@@ -247,6 +270,7 @@ describe('settings validation', () => {
 
   it('builds a code-less 18% delivery line from default settings', () => {
     const invoice = buildInvoice({
+      series: 'REAL',
       order: order(),
       settings: { ...settings, shippingHsn: '' },
       rateTable: { ...rateTable, rules: [{ id: 'shipping-default', priority: 90, appliesTo: 'SHIPPING', match: [{ field: 'any', operator: 'regex', value: '.*' }], hsn: '', rate: 18 }] },

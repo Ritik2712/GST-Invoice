@@ -23,8 +23,11 @@ export async function GET() {
       settings.pricesIncludeGst,
     )
     return NextResponse.json({
-      settings: { ...settings, lastIssuedNumber: await store.getLastIssued(financialYear) },
+      settings: { ...settings, lastIssuedNumber: await store.getLastIssued('REAL', financialYear) },
       financialYear,
+      // Shown for information: test invoices have their own counter and cannot touch the
+      // real series, so there is nothing to edit here.
+      testLastIssuedNumber: await store.getLastIssued('TEST', financialYear),
       rateTableVersion: table.version,
       deliveryRate: { rate: delivery.rate, source: delivery.source },
     })
@@ -43,9 +46,9 @@ export async function PUT(request: NextRequest) {
 
     // The counter file is authoritative; Settings just exposes an editable view of it.
     const financialYear = financialYearKeyIst(new Date())
-    const current = await store.getLastIssued(financialYear)
+    const current = await store.getLastIssued('REAL', financialYear)
     if (incoming.lastIssuedNumber !== current) {
-      await store.setLastIssued(financialYear, incoming.lastIssuedNumber)
+      await store.setLastIssued('REAL', financialYear, incoming.lastIssuedNumber)
     }
 
     const saved = await store.saveSettings(incoming)

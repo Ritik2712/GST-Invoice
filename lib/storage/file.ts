@@ -7,8 +7,10 @@ import type { AppSettings } from '../gst/settings'
 import type { InvoiceSnapshot, RateTable } from '../gst/types'
 import { withLock } from '../mutex'
 import { DEFAULT_RATE_TABLE } from '../seed/rate-table'
+import type { InvoiceSeries } from '../gst/types'
 import {
   activeEntry,
+  counterKey,
   mergeSettings,
   StoreError,
   toIndexEntry,
@@ -113,13 +115,13 @@ async function getCounter(): Promise<Counter> {
   return readJson<Counter>(COUNTER_FILE, {})
 }
 
-async function getLastIssued(financialYear: string): Promise<number> {
-  return (await getCounter())[financialYear] ?? 0
+async function getLastIssued(series: InvoiceSeries, financialYear: string): Promise<number> {
+  return (await getCounter())[counterKey(series, financialYear)] ?? 0
 }
 
-async function setLastIssued(financialYear: string, value: number): Promise<number> {
+async function setLastIssued(series: InvoiceSeries, financialYear: string, value: number): Promise<number> {
   return withLock('invoice-number', async () => {
-    const onDisk = await highestSequenceOnDisk(financialYear)
+    const onDisk = await highestSequenceOnDisk(series, financialYear)
     if (value < onDisk) {
       throw new StoreError(
         `Invoice ${financialYear}/${onDisk} has already been issued; the counter cannot be set below ${onDisk}.`,
@@ -127,7 +129,7 @@ async function setLastIssued(financialYear: string, value: number): Promise<numb
       )
     }
     const counter = await getCounter()
-    counter[financialYear] = value
+    counter[counterKey(series, financialYear)] = value
     await writeJsonAtomic(COUNTER_FILE, counter)
     return value
   })
@@ -216,10 +218,10 @@ async function readAllSnapshots(): Promise<InvoiceSnapshot[]> {
   return snapshots
 }
 
-async function highestSequenceOnDisk(financialYear: string): Promise<number> {
+async function highestSequenceOnDisk(series: InvoiceSeries, financialYear: string): Promise<number> {
   const snapshots = await readAllSnapshots()
   return snapshots
-    .filter((s) => s.financialYear === financialYear)
+    .filter((s) => (s.series ?? 'REAL') === series && s.financialYear === financialYear)
     .reduce((max, s) => Math.max(max, s.sequence), 0)
 }
 
@@ -228,13 +230,15 @@ async function highestSequenceOnDisk(financialYear: string): Promise<number> {
  * `produce` burns no number; one process-wide lock serialises concurrent issues.
  */
 async function issueInvoice(
+  series: InvoiceSeries,
   financialYear: string,
   produce: (sequence: number) => Promise<InvoiceSnapshot>,
 ): Promise<InvoiceSnapshot> {
   return withLock('invoice-number', async () => {
     const counter = await getCounter()
+    const key = counterKey(series, financialYear)
     // Never behind the files, e.g. after a crash between the two writes.
-    const next = Math.max(counter[financialYear] ?? 0, await highestSequenceOnDisk(financialYear)) + 1
+    const next = Math.max(counter[key] ?? 0, await highestSequenceOnDisk(series, financialYear)) + 1
 
     const snapshot = await produce(next)
 
@@ -248,7 +252,7 @@ async function issueInvoice(
     await writeJsonAtomic(file, snapshot)
     await appendToIndex(snapshot)
 
-    counter[financialYear] = next
+    counter[key] = next
     await writeJsonAtomic(COUNTER_FILE, counter)
 
     return snapshot

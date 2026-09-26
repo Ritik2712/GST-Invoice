@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic'
 export async function GET(request: NextRequest) {
   try {
     const [settings, rateTable] = await Promise.all([store.getSettings(), store.getRateTable()])
-    const lastIssued = await store.getLastIssued(financialYearKeyIst(new Date()))
+    const lastIssued = await store.getLastIssued('REAL', financialYearKeyIst(new Date()))
 
     const { invoice } = buildSamplePreview({
       settings,

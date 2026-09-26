@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, type AppSettings } from '../gst/settings'
-import type { InvoiceSnapshot, RateTable } from '../gst/types'
+import type { InvoiceSeries, InvoiceSnapshot, RateTable } from '../gst/types'
 
 /**
  * What every storage backend shares: the contract callers rely on, the error type they
@@ -10,6 +10,7 @@ export type Counter = Record<string, number>
 
 export interface InvoiceIndexEntry {
   invoiceNumber: string
+  series: InvoiceSeries
   orderId: string
   orderName: string
   financialYear: string
@@ -43,8 +44,8 @@ export interface StorageBackend {
   getRateTable(): Promise<RateTable>
   saveRateTable(table: RateTable): Promise<RateTable>
   getCounter(): Promise<Counter>
-  getLastIssued(financialYear: string): Promise<number>
-  setLastIssued(financialYear: string, value: number): Promise<number>
+  getLastIssued(series: InvoiceSeries, financialYear: string): Promise<number>
+  setLastIssued(series: InvoiceSeries, financialYear: string, value: number): Promise<number>
   /** Accepts the invoice number or its URL-safe key. */
   getInvoice(invoiceNumberOrKey: string): Promise<InvoiceSnapshot | null>
   listInvoices(): Promise<InvoiceIndexEntry[]>
@@ -52,6 +53,7 @@ export interface StorageBackend {
   getInvoicesByOrderId(orderIds?: string[]): Promise<Map<string, InvoiceIndexEntry[]>>
   getInvoiceForOrder(orderId: string): Promise<InvoiceSnapshot | null>
   issueInvoice(
+    series: InvoiceSeries,
     financialYear: string,
     produce: (sequence: number) => Promise<InvoiceSnapshot>,
   ): Promise<InvoiceSnapshot>
@@ -60,6 +62,14 @@ export interface StorageBackend {
     cancelledAt: string,
     reason: string | null,
   ): Promise<InvoiceSnapshot | null>
+}
+
+/**
+ * Counter id for a series. REAL keeps the bare financial year it has always used, so an
+ * existing counter document needs no migration; TEST gets its own.
+ */
+export function counterKey(series: InvoiceSeries, financialYear: string): string {
+  return series === 'TEST' ? `TEST:${financialYear}` : financialYear
 }
 
 /** The live invoice for an order: the newest one that has not been cancelled. */
@@ -72,6 +82,7 @@ export function activeEntry(entries: InvoiceIndexEntry[] | undefined): InvoiceIn
 export function toIndexEntry(snapshot: InvoiceSnapshot): InvoiceIndexEntry {
   return {
     invoiceNumber: snapshot.invoiceNumber,
+    series: snapshot.series ?? 'REAL',
     orderId: snapshot.order.id,
     orderName: snapshot.order.name,
     financialYear: snapshot.financialYear,

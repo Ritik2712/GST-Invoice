@@ -65,15 +65,18 @@ export const saveSettings: StorageBackend['saveSettings'] = async (settings) => 
 export const getRateTable: StorageBackend['getRateTable'] = async () => backend().getRateTable()
 export const saveRateTable: StorageBackend['saveRateTable'] = async (table) => backend().saveRateTable(table)
 export const getCounter: StorageBackend['getCounter'] = async () => backend().getCounter()
-export const getLastIssued: StorageBackend['getLastIssued'] = async (fy) => backend().getLastIssued(fy)
-export const setLastIssued: StorageBackend['setLastIssued'] = async (fy, value) => backend().setLastIssued(fy, value)
+export const getLastIssued: StorageBackend['getLastIssued'] = async (series, fy) =>
+  backend().getLastIssued(series, fy)
+export const setLastIssued: StorageBackend['setLastIssued'] = async (series, fy, value) =>
+  backend().setLastIssued(series, fy, value)
 export const getInvoice: StorageBackend['getInvoice'] = async (numberOrKey) => backend().getInvoice(numberOrKey)
 export const listInvoices: StorageBackend['listInvoices'] = async () => backend().listInvoices()
 export const getInvoicesByOrderId: StorageBackend['getInvoicesByOrderId'] = async (orderIds) =>
   backend().getInvoicesByOrderId(orderIds)
 export const getInvoiceForOrder: StorageBackend['getInvoiceForOrder'] = async (orderId) =>
   backend().getInvoiceForOrder(orderId)
-export const issueInvoice: StorageBackend['issueInvoice'] = async (fy, produce) => backend().issueInvoice(fy, produce)
+export const issueInvoice: StorageBackend['issueInvoice'] = async (series, fy, produce) =>
+  backend().issueInvoice(series, fy, produce)
 export const cancelInvoice: StorageBackend['cancelInvoice'] = async (numberOrKey, cancelledAt, reason) =>
   backend().cancelInvoice(numberOrKey, cancelledAt, reason)
 

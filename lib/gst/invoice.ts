@@ -5,6 +5,7 @@ import { stateByCode } from './states'
 import type { AppSettings } from './settings'
 import { amountInWords } from './words'
 import type {
+  InvoiceSeries,
   InvoiceSnapshot,
   NormalizedOrder,
   PartyAddress,
@@ -12,10 +13,20 @@ import type {
   TaxableLineInput,
 } from './types'
 
-export const INVOICE_SCHEMA_VERSION = 1
+// 2 added `series`; snapshots written before it are REAL.
+export const INVOICE_SCHEMA_VERSION = 2
+
+/** Test orders are not supplies, so they never take a number from the real series. */
+export function seriesFor(order: NormalizedOrder): InvoiceSeries {
+  return order.isTest ? 'TEST' : 'REAL'
+}
+
+/** The prefix a series prints with. */
+export function prefixFor(series: InvoiceSeries, settings: AppSettings): string {
+  return series === 'TEST' ? settings.testInvoicePrefix : settings.invoicePrefix
+}
 
 export type InvoiceabilityReason =
-  | 'TEST_ORDER'
   | 'CANCELLED_BEFORE_INVOICE'
   | 'NOT_PAID'
   | 'NO_PLACE_OF_SUPPLY'
@@ -35,16 +46,9 @@ export type Invoiceability =
 export function checkInvoiceability(
   order: NormalizedOrder,
   settingsComplete: boolean,
-  allowTestOrders = false,
 ): Invoiceability {
-  if (order.isTest && !allowTestOrders) {
-    return {
-      invoiceable: false,
-      reason: 'TEST_ORDER',
-      message:
-        'Shopify test order - no invoice, so the series is not left with a number against a supply that never happened. Enable test-order invoices in Settings to override.',
-    }
-  }
+  // A Shopify test order is invoiceable: it simply lands in the TEST series, which keeps
+  // its number out of the real one. `seriesFor` decides which.
   if (order.cancelledAt) {
     return {
       invoiceable: false,
@@ -84,6 +88,7 @@ export interface BuildInvoiceArgs {
   settings: AppSettings
   rateTable: RateTable
   invoiceNumber: string
+  series: InvoiceSeries
   financialYear: string
   sequence: number
   issuedAt: Date
@@ -115,6 +120,7 @@ export function buildInvoice(args: BuildInvoiceArgs): InvoiceSnapshot {
 
   return {
     schemaVersion: INVOICE_SCHEMA_VERSION,
+    series: args.series,
     invoiceNumber: args.invoiceNumber,
     financialYear: args.financialYear,
     sequence: args.sequence,

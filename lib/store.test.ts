@@ -32,7 +32,8 @@ afterEach(async () => {
 
 function snapshot(sequence: number, orderId = `gid://shopify/Order/${sequence}`): InvoiceSnapshot {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    series: 'REAL',
     invoiceNumber: `AD/26-27/${sequence}`,
     financialYear: '2026-27',
     sequence,
@@ -56,38 +57,38 @@ function snapshot(sequence: number, orderId = `gid://shopify/Order/${sequence}`)
 
 describe('invoice numbering on disk', () => {
   it('starts at 1 and increments', async () => {
-    const first = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
-    const second = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    const first = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
+    const second = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
 
     expect(first.sequence).toBe(1)
     expect(second.sequence).toBe(2)
-    expect(await store.getLastIssued('2026-27')).toBe(2)
+    expect(await store.getLastIssued('REAL', '2026-27')).toBe(2)
   })
 
   it('continues from an edited counter', async () => {
-    await store.setLastIssued('2026-27', 105)
-    const issued = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    await store.setLastIssued('REAL', '2026-27', 105)
+    const issued = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
     expect(issued.invoiceNumber).toBe('AD/26-27/106')
   })
 
   it('burns no number when the producer fails', async () => {
-    await store.setLastIssued('2026-27', 10)
+    await store.setLastIssued('REAL', '2026-27', 10)
 
     await expect(
-      store.issueInvoice('2026-27', async () => {
+      store.issueInvoice('REAL', '2026-27', async () => {
         throw new Error('PDF render exploded')
       }),
     ).rejects.toThrow('PDF render exploded')
 
-    expect(await store.getLastIssued('2026-27')).toBe(10)
-    const next = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    expect(await store.getLastIssued('REAL', '2026-27')).toBe(10)
+    const next = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
     expect(next.sequence).toBe(11)
   })
 
   it('keeps each financial year on its own series', async () => {
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
-    const newYear = await store.issueInvoice('2027-28', async (sequence) => ({
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
+    const newYear = await store.issueInvoice('REAL', '2027-28', async (sequence) => ({
       ...snapshot(sequence),
       financialYear: '2027-28',
       invoiceNumber: `AD/27-28/${sequence}`,
@@ -95,13 +96,13 @@ describe('invoice numbering on disk', () => {
     }))
 
     expect(newYear.sequence).toBe(1)
-    expect(await store.getLastIssued('2026-27')).toBe(2)
+    expect(await store.getLastIssued('REAL', '2026-27')).toBe(2)
   })
 
   it('gives concurrent callers distinct, gapless numbers', async () => {
     const results = await Promise.all(
       Array.from({ length: 5 }, (_, index) =>
-        store.issueInvoice('2026-27', async (sequence) => {
+        store.issueInvoice('REAL', '2026-27', async (sequence) => {
           // Force interleaving: without the lock these would collide on the same number.
           await new Promise((resolve) => setTimeout(resolve, 5 - index))
           return snapshot(sequence, `gid://shopify/Order/${index}`)
@@ -113,26 +114,26 @@ describe('invoice numbering on disk', () => {
   })
 
   it('refuses to move the counter below an issued number', async () => {
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
-    await expect(store.setLastIssued('2026-27', 1)).rejects.toThrow(/already been issued/)
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
+    await expect(store.setLastIssued('REAL', '2026-27', 1)).rejects.toThrow(/already been issued/)
   })
 
   it('recovers a counter that fell behind the files on disk', async () => {
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
 
     // Simulate a crash between writing the snapshot and writing the counter.
     await fs.writeFile(path.join(dataRoot, 'data', 'counter.json'), JSON.stringify({ '2026-27': 1 }))
 
-    const next = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    const next = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
     expect(next.sequence).toBe(3)
   })
 })
 
 describe('cancellation and immutability', () => {
   it('marks an invoice cancelled without deleting it or reusing the number', async () => {
-    const issued = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    const issued = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
     const cancelled = await store.cancelInvoice(issued.invoiceNumber, '2026-09-20T00:00:00Z', 'CUSTOMER')
 
     expect(cancelled).toMatchObject({ status: 'CANCELLED', cancellationReason: 'CUSTOMER' })
@@ -143,33 +144,33 @@ describe('cancellation and immutability', () => {
     await expect(fs.access(file)).resolves.toBeUndefined()
 
     // The number stays consumed: the next invoice is 2, not 1.
-    const next = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    const next = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
     expect(next.sequence).toBe(2)
   })
 
   it('refuses to overwrite an existing invoice file', async () => {
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
 
     // Last-resort guard: a producer that hands back a number other than the one it was
     // allotted must not clobber an invoice that already exists.
-    await expect(store.issueInvoice('2026-27', async () => snapshot(1))).rejects.toThrow(/already exists/)
-    expect(await store.getLastIssued('2026-27')).toBe(1)
+    await expect(store.issueInvoice('REAL', '2026-27', async () => snapshot(1))).rejects.toThrow(/already exists/)
+    expect(await store.getLastIssued('REAL', '2026-27')).toBe(1)
   })
 
   it('will not let the counter be rewound past an issued invoice', async () => {
-    await store.setLastIssued('2026-27', 5)
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence))
-    await expect(store.setLastIssued('2026-27', 3)).rejects.toThrow(/cannot be set below 6/)
+    await store.setLastIssued('REAL', '2026-27', 5)
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence))
+    await expect(store.setLastIssued('REAL', '2026-27', 3)).rejects.toThrow(/cannot be set below 6/)
   })
 
   it('replays the stored snapshot for an order', async () => {
-    const issued = await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence, 'gid://shopify/Order/42'))
+    const issued = await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence, 'gid://shopify/Order/42'))
     const replayed = await store.getInvoiceForOrder('gid://shopify/Order/42')
     expect(replayed).toEqual(issued)
   })
 
   it('rebuilds a lost index from the snapshot files', async () => {
-    await store.issueInvoice('2026-27', async (sequence) => snapshot(sequence, 'gid://shopify/Order/7'))
+    await store.issueInvoice('REAL', '2026-27', async (sequence) => snapshot(sequence, 'gid://shopify/Order/7'))
     await fs.rm(path.join(dataRoot, 'data', 'invoices', '_index.json'))
 
     vi.resetModules()
@@ -178,9 +179,46 @@ describe('cancellation and immutability', () => {
   })
 })
 
+describe('test and real series', () => {
+  const testSnapshot = (sequence: number, orderId = `gid://shopify/Order/t${sequence}`) => ({
+    ...snapshot(sequence, orderId),
+    series: 'TEST' as const,
+    invoiceNumber: `TEST/26-27/${sequence}`,
+  })
+
+  it('counts the two series separately', async () => {
+    await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq))
+    await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq))
+    const test = await store.issueInvoice('TEST', '2026-27', async (seq) => testSnapshot(seq))
+
+    // A test order must never consume a number from the real series.
+    expect(test.sequence).toBe(1)
+    expect(await store.getLastIssued('REAL', '2026-27')).toBe(2)
+    expect(await store.getLastIssued('TEST', '2026-27')).toBe(1)
+  })
+
+  it('lets both series hold the same sequence number', async () => {
+    const real = await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq))
+    const test = await store.issueInvoice('TEST', '2026-27', async (seq) => testSnapshot(seq))
+
+    expect(real.sequence).toBe(test.sequence)
+    expect(real.invoiceNumber).not.toBe(test.invoiceNumber)
+    expect(await store.getInvoice(real.invoiceNumber)).toMatchObject({ series: 'REAL' })
+    expect(await store.getInvoice(test.invoiceNumber)).toMatchObject({ series: 'TEST' })
+  })
+
+  it('keeps a test invoice out of the real counter check', async () => {
+    await store.issueInvoice('TEST', '2026-27', async (seq) => testSnapshot(seq))
+    await store.issueInvoice('TEST', '2026-27', async (seq) => testSnapshot(seq))
+    // Nothing real has been issued, so the real counter may still be set to zero.
+    await expect(store.setLastIssued('REAL', '2026-27', 0)).resolves.toBe(0)
+    await expect(store.setLastIssued('TEST', '2026-27', 1)).rejects.toThrow(/cannot be set below 2/)
+  })
+})
+
 describe('cancel and reissue', () => {
   it('frees the order for a new invoice under the next number', async () => {
-    const first = await store.issueInvoice('2026-27', async (seq) =>
+    const first = await store.issueInvoice('REAL', '2026-27', async (seq) =>
       snapshot(seq, 'gid://shopify/Order/42'),
     )
     await store.cancelInvoice(first.invoiceNumber, '2026-09-20T00:00:00Z', 'Wrong GST rate')
@@ -192,7 +230,7 @@ describe('cancel and reissue', () => {
     const stored = await store.getInvoice(first.invoiceNumber)
     expect(stored).toMatchObject({ status: 'CANCELLED', cancellationReason: 'Wrong GST rate' })
 
-    const reissued = await store.issueInvoice('2026-27', async (seq) =>
+    const reissued = await store.issueInvoice('REAL', '2026-27', async (seq) =>
       snapshot(seq, 'gid://shopify/Order/42'),
     )
     expect(reissued.sequence).toBe(2) // 1 stays consumed
@@ -200,9 +238,9 @@ describe('cancel and reissue', () => {
   })
 
   it('keeps both invoices in the order history', async () => {
-    const first = await store.issueInvoice('2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/7'))
+    const first = await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/7'))
     await store.cancelInvoice(first.invoiceNumber, '2026-09-20T00:00:00Z', 'Duplicate')
-    await store.issueInvoice('2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/7'))
+    await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/7'))
 
     const entries = (await store.getInvoicesByOrderId()).get('gid://shopify/Order/7')!
     expect(entries.map((e) => [e.sequence, e.status])).toEqual([
@@ -214,9 +252,9 @@ describe('cancel and reissue', () => {
   })
 
   it('rebuilds an order history of several invoices from the files', async () => {
-    const first = await store.issueInvoice('2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/9'))
+    const first = await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/9'))
     await store.cancelInvoice(first.invoiceNumber, '2026-09-20T00:00:00Z', 'Wrong address')
-    await store.issueInvoice('2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/9'))
+    await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/9'))
     await fs.rm(path.join(dataRoot, 'data', 'invoices', '_index.json'))
 
     vi.resetModules()
@@ -227,7 +265,7 @@ describe('cancel and reissue', () => {
   })
 
   it('migrates an index written in the old one-invoice-per-order shape', async () => {
-    const issued = await store.issueInvoice('2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/5'))
+    const issued = await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq, 'gid://shopify/Order/5'))
 
     // The pre-cancellation format stored a bare entry, not an array.
     await fs.writeFile(
@@ -243,7 +281,7 @@ describe('cancel and reissue', () => {
   })
 
   it('cancelling twice is a no-op rather than a second cancellation', async () => {
-    const issued = await store.issueInvoice('2026-27', async (seq) => snapshot(seq))
+    const issued = await store.issueInvoice('REAL', '2026-27', async (seq) => snapshot(seq))
     await store.cancelInvoice(issued.invoiceNumber, '2026-09-20T00:00:00Z', 'First')
     const again = await store.cancelInvoice(issued.invoiceNumber, '2026-09-21T00:00:00Z', 'Second')
     expect(again?.cancellationReason).toBe('First')

@@ -64,6 +64,7 @@ async function render(stateCode: string) {
     order: order(stateCode),
     settings,
     rateTable,
+    series: 'REAL',
     invoiceNumber: 'AD/26-27/106',
     financialYear: '2026-27',
     sequence: 106,

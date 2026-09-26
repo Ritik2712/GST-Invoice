@@ -2,7 +2,7 @@ import { formatIstDate } from './gst/fy'
 import { checkInvoiceability } from './gst/invoice'
 import { invoiceFileKey } from './gst/numbering'
 import { resolvePlaceOfSupply } from './gst/placeOfSupply'
-import type { FinancialStatus, NormalizedOrder } from './gst/types'
+import type { FinancialStatus, InvoiceSeries, NormalizedOrder } from './gst/types'
 import type { InvoiceIndexEntry } from './store'
 
 /** What the Orders table renders. Shared by the API route and the client component. */
@@ -22,6 +22,8 @@ export interface OrderRow {
   invoiceNumber: string | null
   /** URL-safe form of the invoice number, used in the PDF route. */
   invoiceKey: string | null
+  /** Which numbering series this order's invoices belong to, once it has any. */
+  invoiceSeries: InvoiceSeries | null
   /**
    * Invoices cancelled for this order, oldest first. They keep their numbers for ever and
    * stay downloadable; the order itself is free to be invoiced again.
@@ -88,7 +90,6 @@ export function toOrderRow(
   order: NormalizedOrder,
   invoices: InvoiceIndexEntry[] | undefined,
   settingsComplete: boolean,
-  allowTestOrders = false,
 ): OrderRow {
   const place = resolvePlaceOfSupply(order)
   const all = invoices ?? []
@@ -107,6 +108,7 @@ export function toOrderRow(
       ...base(order, place),
       invoiceNumber: live.invoiceNumber,
       invoiceKey: invoiceFileKey(live.invoiceNumber),
+      invoiceSeries: live.series,
       cancelledInvoices,
       invoiceStatus: 'ISSUED',
       canDownload: true,
@@ -115,11 +117,12 @@ export function toOrderRow(
   }
 
   // Cancelled invoices leave the order invoiceable again; their numbers stay consumed.
-  const check = checkInvoiceability(order, settingsComplete, allowTestOrders)
+  const check = checkInvoiceability(order, settingsComplete)
   return {
     ...base(order, place),
     invoiceNumber: null,
     invoiceKey: null,
+    invoiceSeries: all.at(-1)?.series ?? null,
     cancelledInvoices,
     invoiceStatus: cancelledInvoices.length
       ? 'CANCELLED'

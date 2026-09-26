@@ -71,11 +71,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     return NextResponse.json({
       order,
       placeOfSupply: resolvePlaceOfSupply(order),
-      invoiceability: checkInvoiceability(
-        order,
-        isSettingsComplete(settings),
-        settings.allowTestOrderInvoices,
-      ),
+      invoiceability: checkInvoiceability(order, isSettingsComplete(settings)),
       lines,
       shipping: order.shipping,
       invoices: history.map((entry) => ({
