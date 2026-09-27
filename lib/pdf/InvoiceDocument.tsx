@@ -9,7 +9,7 @@ import {
 import React from "react";
 
 import { formatAddress } from "../gst/invoice";
-import { formatInr } from "../gst/money";
+import { formatInr, round2 } from "../gst/money";
 import type { InvoiceSnapshot } from "../gst/types";
 
 /**
@@ -79,6 +79,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#f3f4f6",
   },
   td: { padding: 4, fontSize: 8 },
+  hsnTotalRow: { borderTopWidth: 0.5, borderTopColor: "#d0d0d0", marginTop: 2, paddingTop: 2 },
   cellBorder: {
     borderRightWidth: 0.7,
     borderColor: "#9ca3af",
@@ -117,10 +118,23 @@ const COLS = {
   sn: 22,
   hsn: 46,
   qty: 30,
+  rate: 46,
+  discount: 50,
+  taxable: 54,
+  taxPair: 42,
+  taxSingle: 62,
+  total: 58,
+};
+
+/**
+ * Widths for an order with nothing discounted. The Discount column is dropped rather than
+ * printed full of dashes, and the space it held goes back to the figures and the description.
+ */
+const COLS_NO_DISCOUNT = {
+  ...COLS,
   rate: 52,
   taxable: 58,
   taxPair: 46,
-  taxSingle: 62,
   total: 62,
 };
 
@@ -134,12 +148,88 @@ export interface InvoiceDocumentProps {
   watermark?: string | null;
 }
 
+/**
+ * The pre-tax rows of the totals column. Every figure is exclusive of GST so that
+ * `itemSubtotal - itemDiscount + shipping` is the invoice's taxable value, and the column
+ * as printed lands exactly on the grand total once the tax heads and round-off are added.
+ *
+ * Taxable value plus the line's own discount is the pre-tax gross whichever basis the line
+ * was priced on, and it reads correctly off snapshots written before `grossValue` existed.
+ */
+/**
+ * Whether the line table carries a Discount column. It earns its place only if some row
+ * would put a figure in it: an order with nothing discounted gets a column of dashes
+ * otherwise. Order-level discounts are allocated onto the lines, so this sees those too.
+ */
+export function showsDiscountColumn(lines: InvoiceSnapshot["lines"]): boolean {
+  return lines.some((line) => line.discount > 0);
+}
+
+/** Widths for the HSN summary, sized to sit beside the 216pt totals block. */
+const HSN_COLS = {
+  hsn: { width: 60 },
+  rate: { width: 28 },
+  taxable: { width: 56 },
+  tax: { width: 50 },
+  taxWide: { width: 100 },
+  cess: { width: 44 },
+};
+
+/** Column totals for the HSN summary, so the table can be checked against the totals block. */
+export function hsnSummaryTotals(rows: InvoiceSnapshot["hsnSummary"]): {
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  cess: number;
+} {
+  const add = (pick: (row: InvoiceSnapshot["hsnSummary"][number]) => number) =>
+    round2(rows.reduce((total, row) => total + pick(row), 0));
+  return {
+    taxableValue: add((row) => row.taxableValue),
+    cgst: add((row) => row.cgst),
+    sgst: add((row) => row.sgst),
+    igst: add((row) => row.igst),
+    cess: add((row) => row.cess),
+  };
+}
+
+export function totalsBreakdown(lines: InvoiceSnapshot["lines"]): {
+  itemSubtotal: number;
+  itemDiscount: number;
+  shipping: number;
+} {
+  const goods = lines.filter((line) => line.kind === "GOODS");
+  return {
+    itemSubtotal: round2(
+      goods.reduce((total, line) => total + line.taxableValue + line.discount, 0),
+    ),
+    itemDiscount: round2(goods.reduce((total, line) => total + line.discount, 0)),
+    // Shipping is shown net of its own discount, which is why that discount is left out of
+    // the Discount row - counting it in both would leave the column short by the freight waived.
+    shipping: round2(
+      lines
+        .filter((line) => line.kind === "SHIPPING")
+        .reduce((total, line) => total + line.taxableValue, 0),
+    ),
+  };
+}
+
 export function InvoiceDocument({
   invoice,
   watermark,
 }: InvoiceDocumentProps): React.ReactElement {
   const intra = invoice.taxKind === "INTRA_STATE";
   const { seller, buyer, totals } = invoice;
+  const {
+    itemSubtotal,
+    itemDiscount,
+    shipping: shippingAmount,
+  } = totalsBreakdown(invoice.lines);
+  const hsnTotals = hsnSummaryTotals(invoice.hsnSummary);
+  const showDiscount = showsDiscountColumn(invoice.lines);
+  const cols = showDiscount ? COLS : COLS_NO_DISCOUNT;
+  const anyCess = invoice.hsnSummary.some((row) => row.cess > 0);
   const cancelled = invoice.status === "CANCELLED";
   const stamp = cancelled ? "CANCELLED" : watermark?.trim() || null;
   const invoiceTitle = seller.invoiceTitle?.trim() || "INVOICE RECEIPT";
@@ -240,7 +330,7 @@ export function InvoiceDocument({
               style={[
                 styles.th,
                 styles.cellBorder,
-                { width: COLS.sn },
+                { width: cols.sn },
                 styles.center,
               ]}
             >
@@ -253,7 +343,7 @@ export function InvoiceDocument({
               style={[
                 styles.th,
                 styles.cellBorder,
-                { width: COLS.hsn },
+                { width: cols.hsn },
                 styles.center,
               ]}
             >
@@ -263,7 +353,7 @@ export function InvoiceDocument({
               style={[
                 styles.th,
                 styles.cellBorder,
-                { width: COLS.qty },
+                { width: cols.qty },
                 styles.right,
               ]}
             >
@@ -273,17 +363,29 @@ export function InvoiceDocument({
               style={[
                 styles.th,
                 styles.cellBorder,
-                { width: COLS.rate },
+                { width: cols.rate },
                 styles.right,
               ]}
             >
               Unit
             </Text>
+            {showDiscount && (
+              <Text
+                style={[
+                  styles.th,
+                  styles.cellBorder,
+                  { width: cols.discount },
+                  styles.right,
+                ]}
+              >
+                Discount
+              </Text>
+            )}
             <Text
               style={[
                 styles.th,
                 styles.cellBorder,
-                { width: COLS.taxable },
+                { width: cols.taxable },
                 styles.right,
               ]}
             >
@@ -295,7 +397,7 @@ export function InvoiceDocument({
                   style={[
                     styles.th,
                     styles.cellBorder,
-                    { width: COLS.taxPair },
+                    { width: cols.taxPair },
                     styles.right,
                   ]}
                 >
@@ -305,7 +407,7 @@ export function InvoiceDocument({
                   style={[
                     styles.th,
                     styles.cellBorder,
-                    { width: COLS.taxPair },
+                    { width: cols.taxPair },
                     styles.right,
                   ]}
                 >
@@ -317,14 +419,14 @@ export function InvoiceDocument({
                 style={[
                   styles.th,
                   styles.cellBorder,
-                  { width: COLS.taxSingle },
+                  { width: cols.taxSingle },
                   styles.right,
                 ]}
               >
                 IGST
               </Text>
             )}
-            <Text style={[styles.th, { width: COLS.total }, styles.right]}>
+            <Text style={[styles.th, { width: cols.total }, styles.right]}>
               Total
             </Text>
           </View>
@@ -339,7 +441,7 @@ export function InvoiceDocument({
                 style={[
                   styles.td,
                   styles.cellBorder,
-                  { width: COLS.sn },
+                  { width: cols.sn },
                   styles.center,
                 ]}
               >
@@ -347,17 +449,12 @@ export function InvoiceDocument({
               </Text>
               <View style={[styles.td, styles.cellBorder, { flex: 1 }]}>
                 <Text>{line.title}</Text>
-                {line.discount > 0 && (
-                  <Text style={[styles.muted, { fontSize: 7 }]}>
-                    Discount: Rs. {formatInr(line.discount)}
-                  </Text>
-                )}
               </View>
               <Text
                 style={[
                   styles.td,
                   styles.cellBorder,
-                  { width: COLS.hsn },
+                  { width: cols.hsn },
                   styles.center,
                 ]}
               >
@@ -367,7 +464,7 @@ export function InvoiceDocument({
                 style={[
                   styles.td,
                   styles.cellBorder,
-                  { width: COLS.qty },
+                  { width: cols.qty },
                   styles.right,
                 ]}
               >
@@ -377,17 +474,29 @@ export function InvoiceDocument({
                 style={[
                   styles.td,
                   styles.cellBorder,
-                  { width: COLS.rate },
+                  { width: cols.rate },
                   styles.right,
                 ]}
               >
                 {formatInr(line.unitTaxableValue)}
               </Text>
+              {showDiscount && (
+                <Text
+                  style={[
+                    styles.td,
+                    styles.cellBorder,
+                    { width: cols.discount },
+                    styles.right,
+                  ]}
+                >
+                  {line.discount > 0 ? `-${formatInr(line.discount)}` : "-"}
+                </Text>
+              )}
               <Text
                 style={[
                   styles.td,
                   styles.cellBorder,
-                  { width: COLS.taxable },
+                  { width: cols.taxable },
                   styles.right,
                 ]}
               >
@@ -399,7 +508,7 @@ export function InvoiceDocument({
                     style={[
                       styles.td,
                       styles.cellBorder,
-                      { width: COLS.taxPair },
+                      { width: cols.taxPair },
                       styles.right,
                     ]}
                   >
@@ -412,7 +521,7 @@ export function InvoiceDocument({
                     style={[
                       styles.td,
                       styles.cellBorder,
-                      { width: COLS.taxPair },
+                      { width: cols.taxPair },
                       styles.right,
                     ]}
                   >
@@ -427,7 +536,7 @@ export function InvoiceDocument({
                   style={[
                     styles.td,
                     styles.cellBorder,
-                    { width: COLS.taxSingle },
+                    { width: cols.taxSingle },
                     styles.right,
                   ]}
                 >
@@ -437,7 +546,7 @@ export function InvoiceDocument({
                   >{`\n${line.rate}%`}</Text>
                 </Text>
               )}
-              <Text style={[styles.td, { width: COLS.total }, styles.right]}>
+              <Text style={[styles.td, { width: cols.total }, styles.right]}>
                 {formatInr(line.total)}
               </Text>
             </View>
@@ -458,52 +567,124 @@ export function InvoiceDocument({
               <View style={{ marginTop: 8 }}>
                 <Text style={styles.sectionLabel}>HSN / rate summary</Text>
                 <View style={[styles.row, { marginTop: 2 }]}>
-                  <Text style={[styles.bold, { width: 54, fontSize: 7 }]}>
+                  <Text style={[styles.bold, HSN_COLS.hsn, { fontSize: 7 }]}>
                     HSN
                   </Text>
-                  <Text style={[styles.bold, { width: 32, fontSize: 7 }]}>
+                  <Text style={[styles.bold, HSN_COLS.rate, { fontSize: 7 }]}>
                     Rate
                   </Text>
                   <Text
-                    style={[
-                      styles.bold,
-                      { width: 64, fontSize: 7 },
-                      styles.right,
-                    ]}
+                    style={[styles.bold, HSN_COLS.taxable, { fontSize: 7 }, styles.right]}
                   >
                     Taxable
                   </Text>
-                  <Text
-                    style={[
-                      styles.bold,
-                      { width: 64, fontSize: 7 },
-                      styles.right,
-                    ]}
-                  >
-                    Tax
-                  </Text>
+                  {/* Split by head, as GSTR-1's HSN table wants it - a combined figure has
+                      to be halved by hand, and only the seller knows if that is safe. */}
+                  {intra ? (
+                    <>
+                      <Text style={[styles.bold, HSN_COLS.tax, { fontSize: 7 }, styles.right]}>
+                        CGST
+                      </Text>
+                      <Text style={[styles.bold, HSN_COLS.tax, { fontSize: 7 }, styles.right]}>
+                        SGST
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={[styles.bold, HSN_COLS.taxWide, { fontSize: 7 }, styles.right]}>
+                      IGST
+                    </Text>
+                  )}
+                  {anyCess && (
+                    <Text style={[styles.bold, HSN_COLS.cess, { fontSize: 7 }, styles.right]}>
+                      Cess
+                    </Text>
+                  )}
                 </View>
                 {invoice.hsnSummary.map((row) => (
                   <View key={`${row.hsn}-${row.rate}`} style={styles.row}>
-                    <Text style={{ width: 54, fontSize: 7.5 }}>
+                    <Text style={[HSN_COLS.hsn, { fontSize: 7.5 }]}>
                       {row.hsn || row.label || "-"}
                     </Text>
-                    <Text style={{ width: 32, fontSize: 7.5 }}>
+                    <Text style={[HSN_COLS.rate, { fontSize: 7.5 }]}>
                       {row.rate}%
                     </Text>
-                    <Text style={[{ width: 64, fontSize: 7.5 }, styles.right]}>
+                    <Text style={[HSN_COLS.taxable, { fontSize: 7.5 }, styles.right]}>
                       {formatInr(row.taxableValue)}
                     </Text>
-                    <Text style={[{ width: 64, fontSize: 7.5 }, styles.right]}>
-                      {formatInr(row.cgst + row.sgst + row.igst + row.cess)}
-                    </Text>
+                    {intra ? (
+                      <>
+                        <Text style={[HSN_COLS.tax, { fontSize: 7.5 }, styles.right]}>
+                          {formatInr(row.cgst)}
+                        </Text>
+                        <Text style={[HSN_COLS.tax, { fontSize: 7.5 }, styles.right]}>
+                          {formatInr(row.sgst)}
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={[HSN_COLS.taxWide, { fontSize: 7.5 }, styles.right]}>
+                        {formatInr(row.igst)}
+                      </Text>
+                    )}
+                    {anyCess && (
+                      <Text style={[HSN_COLS.cess, { fontSize: 7.5 }, styles.right]}>
+                        {formatInr(row.cess)}
+                      </Text>
+                    )}
                   </View>
                 ))}
+                {/* The summary is only useful if it can be checked against the totals column. */}
+                <View style={[styles.row, styles.hsnTotalRow]}>
+                  <Text style={[styles.bold, HSN_COLS.hsn, { fontSize: 7.5 }]}>
+                    Total
+                  </Text>
+                  <Text style={[HSN_COLS.rate, { fontSize: 7.5 }]} />
+                  <Text style={[styles.bold, HSN_COLS.taxable, { fontSize: 7.5 }, styles.right]}>
+                    {formatInr(hsnTotals.taxableValue)}
+                  </Text>
+                  {intra ? (
+                    <>
+                      <Text style={[styles.bold, HSN_COLS.tax, { fontSize: 7.5 }, styles.right]}>
+                        {formatInr(hsnTotals.cgst)}
+                      </Text>
+                      <Text style={[styles.bold, HSN_COLS.tax, { fontSize: 7.5 }, styles.right]}>
+                        {formatInr(hsnTotals.sgst)}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={[styles.bold, HSN_COLS.taxWide, { fontSize: 7.5 }, styles.right]}>
+                      {formatInr(hsnTotals.igst)}
+                    </Text>
+                  )}
+                  {anyCess && (
+                    <Text style={[styles.bold, HSN_COLS.cess, { fontSize: 7.5 }, styles.right]}>
+                      {formatInr(hsnTotals.cess)}
+                    </Text>
+                  )}
+                </View>
               </View>
             </View>
 
             <View style={{ width: 216 }}>
-              <TotalRow label="Taxable value" value={totals.taxableValue} />
+              {!invoice.pricesIncludeGst && (
+                <>
+                  <TotalRow label="Subtotal" value={itemSubtotal} />
+                  {itemDiscount > 0 && (
+                    <TotalRow label="Discount" value={-itemDiscount} />
+                  )}
+                  {shippingAmount > 0 && <TotalRow label="Shipping" value={shippingAmount} />}
+                  {/* Where the commercial breakdown above meets the tax below, and the figure
+                      the HSN summary adds up to. Without it the reader has to do the sum. */}
+                  <TotalRow label="Taxable value" value={totals.taxableValue} />
+                </>
+              )}
+              {invoice.pricesIncludeGst && (
+                <>
+                  {totals.discount > 0 && (
+                    <TotalRow label="Discount" value={-totals.discount} />
+                  )}
+                  <TotalRow label="Taxable value" value={totals.taxableValue} />
+                </>
+              )}
               {intra ? (
                 <>
                   <TotalRow label="CGST" value={totals.cgst} />

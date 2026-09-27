@@ -84,6 +84,7 @@ const orderFields = ({ customer, inventory }: OptionalBlocks) => /* GraphQL */ `
     cancelReason
     test
     displayFinancialStatus
+    taxesIncluded
     currencyCode
     email
     phone
@@ -93,6 +94,11 @@ const orderFields = ({ customer, inventory }: OptionalBlocks) => /* GraphQL */ `
       value
     }
     totalPriceSet {
+      shopMoney {
+        amount
+      }
+    }
+    currentTotalDiscountsSet {
       shopMoney {
         amount
       }
@@ -115,6 +121,16 @@ const orderFields = ({ customer, inventory }: OptionalBlocks) => /* GraphQL */ `
         discountedPriceSet {
           shopMoney {
             amount
+          }
+        }
+        taxLines {
+          rate
+        }
+        discountAllocations {
+          allocatedAmountSet {
+            shopMoney {
+              amount
+            }
           }
         }
       }
@@ -140,6 +156,16 @@ const orderFields = ({ customer, inventory }: OptionalBlocks) => /* GraphQL */ `
         originalTotalSet {
           shopMoney {
             amount
+          }
+        }
+        taxLines {
+          rate
+        }
+        discountAllocations {
+          allocatedAmountSet {
+            shopMoney {
+              amount
+            }
           }
         }
         ${inventory ? INVENTORY_BLOCK : ''}
@@ -205,6 +231,10 @@ interface RawAddress {
   phone?: string | null
 }
 
+interface RawDiscountAllocation {
+  allocatedAmountSet?: { shopMoney: { amount: string } } | null
+}
+
 interface RawOrder {
   id: string
   name: string
@@ -214,12 +244,14 @@ interface RawOrder {
   cancelReason?: string | null
   test?: boolean | null
   displayFinancialStatus?: string | null
+  taxesIncluded?: boolean | null
   currencyCode: string
   email?: string | null
   phone?: string | null
   note?: string | null
   customAttributes: Array<{ key: string; value?: string | null }>
   totalPriceSet: { shopMoney: { amount: string } }
+  currentTotalDiscountsSet?: { shopMoney: { amount: string } } | null
   billingAddress?: RawAddress | null
   shippingAddress?: RawAddress | null
   customer?: {
@@ -234,6 +266,8 @@ interface RawOrder {
       title?: string | null
       originalPriceSet?: { shopMoney: { amount: string } } | null
       discountedPriceSet?: { shopMoney: { amount: string } } | null
+      taxLines?: Array<{ rate?: number | null }> | null
+      discountAllocations?: RawDiscountAllocation[] | null
     }>
   }
   lineItems: {
@@ -247,6 +281,8 @@ interface RawOrder {
       originalUnitPriceSet: { shopMoney: { amount: string } }
       discountedTotalSet: { shopMoney: { amount: string } }
       originalTotalSet: { shopMoney: { amount: string } }
+      taxLines?: Array<{ rate?: number | null }> | null
+      discountAllocations?: RawDiscountAllocation[] | null
       variant?: { inventoryItem?: { harmonizedSystemCode?: string | null } | null } | null
       product?: {
         productType?: string | null
@@ -360,6 +396,34 @@ function money(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+/**
+ * Shopify splits an Indian rate across one tax line per head (CGST 2.5% + SGST 2.5%), so the
+ * line's rate is their sum. An empty list means Shopify charged no tax at all, which is not
+ * the same as a 0% rate - the rate table has to decide that one, so it returns undefined.
+ */
+function taxRate(taxLines: Array<{ rate?: number | null }> | null | undefined): number | undefined {
+  if (!taxLines || taxLines.length === 0) return undefined
+  return Math.round(taxLines.reduce((total, line) => total + Number(line.rate ?? 0), 0) * 10_000) / 100
+}
+
+/** The rate charged on freight. Shipping lines carry the same rate, so summing them would double it. */
+function shippingTaxRate(nodes: Array<{ taxLines?: Array<{ rate?: number | null }> | null }>): number | undefined {
+  const rates = nodes.map((node) => taxRate(node.taxLines)).filter((rate): rate is number => rate !== undefined)
+  return rates.length === 0 ? undefined : Math.max(...rates)
+}
+
+/** Shopify's own allocation of order-level and code-based discounts onto a line. */
+function allocatedDiscount(allocations: RawDiscountAllocation[] | null | undefined): number {
+  if (!allocations) return 0
+  return round2(
+    allocations.reduce((total, one) => total + money(one.allocatedAmountSet?.shopMoney.amount), 0),
+  )
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
 function address(raw: RawAddress | null | undefined): PartyAddress | null {
   if (!raw) return null
   return {
@@ -426,6 +490,12 @@ function orderNumberFrom(name: string): number {
 }
 
 export function normalizeOrder(raw: RawOrder): NormalizedOrder {
+  // With taxesIncluded false Shopify added tax on top of the listed prices. A line it then
+  // charged no tax on was still paid in full, so its amount has to be read as tax-inclusive.
+  const taxesIncluded = raw.taxesIncluded ?? undefined
+  const chargedTaxFree = (taxLines: Array<{ rate?: number | null }> | null | undefined) =>
+    taxesIncluded === false && taxRate(taxLines) === undefined ? true : undefined
+
   const lines: TaxableLineInput[] = raw.lineItems.nodes.map((item) => {
     const tags = item.product?.tags ?? []
     const originalTotal = money(item.originalTotalSet.shopMoney.amount)
@@ -445,8 +515,19 @@ export function normalizeOrder(raw: RawOrder): NormalizedOrder {
       ),
       quantity: item.quantity,
       unitPrice: money(item.originalUnitPriceSet.shopMoney.amount),
-      // Shopify reports the post-discount total; the difference is the allocated discount.
-      discount: Math.max(0, originalTotal - discountedTotal),
+      // Two sources, deliberately not added. discountAllocations is every discount allocated
+      // to the line, line-level and order-level alike, so it is the whole answer when present.
+      // discountedTotalSet sees line-level discounts only. Taking the larger uses Shopify's
+      // full allocation where it has one, keeps working on a response that carries none, and
+      // can never count a line-level discount twice.
+      discount: round2(
+        Math.max(
+          Math.max(0, originalTotal - discountedTotal),
+          allocatedDiscount(item.discountAllocations),
+        ),
+      ),
+      taxRateOverride: taxRate(item.taxLines),
+      priceIncludesTax: chargedTaxFree(item.taxLines),
       kind: 'GOODS',
     }
   })
@@ -460,6 +541,39 @@ export function normalizeOrder(raw: RawOrder): NormalizedOrder {
     (total, node) => total + money(node.discountedPriceSet?.shopMoney.amount ?? node.originalPriceSet?.shopMoney.amount),
     0,
   )
+  // Same two sources, same reason for taking the larger rather than the sum.
+  const shippingDiscount = round2(
+    Math.max(
+      Math.max(0, shippingOriginal - shippingDiscounted),
+      shippingNodes.reduce((total, node) => total + allocatedDiscount(node.discountAllocations), 0),
+    ),
+  )
+
+  // Last resort only. discountAllocations is Shopify's own answer and covers order-level and
+  // code-based discounts, so this runs when the order total still disagrees with it - an older
+  // API shape, say. Spreading by line value is a guess, and a guess is wrong for a discount
+  // that only applied to some products, so it never overrides an allocation Shopify gave us.
+  const reportedDiscount = money(raw.currentTotalDiscountsSet?.shopMoney.amount)
+  const lineAndShippingDiscount =
+    lines.reduce((total, line) => total + line.discount, 0) + shippingDiscount
+  const missingDiscount = round2(Math.max(0, reportedDiscount - lineAndShippingDiscount))
+  if (missingDiscount > 0 && lines.length > 0) {
+    // Cap each share at what is left on the line so a discount can never drive a line negative.
+    const headroom = lines.map((line) => Math.max(0, round2(line.unitPrice * line.quantity - line.discount)))
+    const totalHeadroom = headroom.reduce((total, value) => total + value, 0)
+    if (totalHeadroom > 0) {
+      let allocated = 0
+      lines.forEach((line, index) => {
+        const proportional =
+          index === lines.length - 1
+            ? round2(missingDiscount - allocated)
+            : round2((missingDiscount * headroom[index]) / totalHeadroom)
+        const share = Math.min(Math.max(0, proportional), headroom[index])
+        allocated = round2(allocated + share)
+        line.discount = round2(line.discount + share)
+      })
+    }
+  }
 
   const customerName = [raw.customer?.firstName, raw.customer?.lastName].filter(Boolean).join(' ').trim()
 
@@ -487,10 +601,13 @@ export function normalizeOrder(raw: RawOrder): NormalizedOrder {
       shippingOriginal > 0
         ? {
             amount: shippingOriginal,
-            discount: Math.max(0, shippingOriginal - shippingDiscounted),
+            discount: shippingDiscount,
             title: shippingNodes[0]?.title || 'Shipping',
+            taxRate: shippingTaxRate(shippingNodes),
+            priceIncludesTax: chargedTaxFree(shippingNodes.flatMap((node) => node.taxLines ?? [])),
           }
         : null,
     orderTotal: money(raw.totalPriceSet.shopMoney.amount),
+    pricesIncludeGst: taxesIncluded,
   }
 }

@@ -50,7 +50,17 @@ export function calculate(input: CalculationInput): CalculationResult {
     } else {
       resolved = shippingRate(line, rateTable, pricesIncludeGst, treatment, principal)
     }
-    return buildLine(line, resolved, pricesIncludeGst, taxKind)
+    const override = line.taxRateOverride
+    return buildLine(
+      line,
+      // Shopify's own rate wins when it charged tax on the line, but the snapshot has to say
+      // so - printing a rate the table never chose under the table's own source is a lie.
+      override === undefined
+        ? resolved
+        : { ...resolved, rate: override, source: 'shopify-tax-line' },
+      pricesIncludeGst,
+      taxKind,
+    )
   })
 
   const hsnSummary = summariseByHsn(lines)
@@ -173,23 +183,30 @@ function buildLine(
   pricesIncludeGst: boolean,
   taxKind: TaxKind,
 ): CalcLine {
+  // A line Shopify charged no tax on was paid in full by the customer, so the tax we are
+  // obliged to charge has to be carved out of that amount rather than added on top.
+  const inclusive = line.priceIncludesTax ?? pricesIncludeGst
   const grossAfterDiscount = round2(line.unitPrice * line.quantity - line.discount)
-  const taxableValue = taxableValueOf(grossAfterDiscount, resolved.rate, pricesIncludeGst)
-  const taxAmount = round2((taxableValue * resolved.rate) / 100)
+  const taxableValue = taxableValueOf(grossAfterDiscount, resolved.rate, inclusive)
+  const unitTaxableValue = taxableValueOf(line.unitPrice, resolved.rate, inclusive)
   const cess = round2((taxableValue * resolved.cess) / 100)
 
-  // Splitting CGST/SGST as half each and taking the remainder on SGST keeps
-  // cgst + sgst === taxAmount exactly, even for odd paise.
-  const cgst = taxKind === 'INTRA_STATE' ? round2(taxAmount / 2) : 0
-  const sgst = taxKind === 'INTRA_STATE' ? round2(taxAmount - cgst) : 0
-  const igst = taxKind === 'INTER_STATE' ? taxAmount : 0
+  // CGST and SGST are each half the rate applied to the same value (s.9(1) CGST Act read
+  // with the SGST Acts), so each half is rounded on its own. Deriving one from the other
+  // would put a paisa on one head that the printed rate cannot account for.
+  const cgst = taxKind === 'INTRA_STATE' ? round2((taxableValue * resolved.rate) / 200) : 0
+  const sgst = cgst
+  const igst = taxKind === 'INTER_STATE' ? round2((taxableValue * resolved.rate) / 100) : 0
 
   return {
     id: line.id,
     title: [line.title, line.variantTitle].filter(Boolean).join(' - '),
     hsn: resolved.hsn,
     quantity: line.quantity,
-    unitTaxableValue: line.quantity > 0 ? round2(taxableValue / line.quantity) : 0,
+    // Unit price is always before discount. The discount and taxable columns make the
+    // reduction explicit instead of making a customer's listed product price appear to change.
+    unitTaxableValue,
+    grossValue: round2(line.unitPrice * line.quantity),
     taxableValue,
     discount: round2(line.discount),
     rate: resolved.rate,

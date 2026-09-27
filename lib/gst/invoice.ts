@@ -4,6 +4,7 @@ import { resolvePlaceOfSupply, type PlaceOfSupply } from './placeOfSupply'
 import { stateByCode } from './states'
 import type { AppSettings } from './settings'
 import { amountInWords } from './words'
+import { round2 } from './money'
 import type {
   InvoiceSeries,
   InvoiceSnapshot,
@@ -15,6 +16,9 @@ import type {
 
 // 2 added `series`; snapshots written before it are REAL.
 export const INVOICE_SCHEMA_VERSION = 2
+
+/** Round-off on a tax invoice settles paise. Beyond this the difference is not rounding. */
+const MAX_ROUND_OFF = 0.5
 
 /** Test orders are not supplies, so they never take a number from the real series. */
 export function seriesFor(order: NormalizedOrder): InvoiceSeries {
@@ -107,14 +111,28 @@ export function buildInvoice(args: BuildInvoiceArgs): InvoiceSnapshot {
   const place = resolvePlaceOfSupplyOrThrow(order, args.placeOfSupplyOverride)
   const lines = withShippingLine(order, settings)
 
+  const pricesIncludeGst = order.pricesIncludeGst ?? settings.pricesIncludeGst
   const result = calculate({
     sellerStateCode: settings.sellerStateCode,
     placeOfSupplyStateCode: place.stateCode,
-    pricesIncludeGst: settings.pricesIncludeGst,
+    pricesIncludeGst,
     lines,
     rateTable,
     shippingTreatment: settings.shippingTreatment,
   })
+  // Shopify is the payment record, so the invoice is issued for the amount actually charged
+  // rather than the app's usual nearest-rupee rounding. The gap belongs in round-off only
+  // while it *is* rounding: anything larger means the calculation disagrees with what the
+  // customer paid, and printing that under "Round off" would disguise a real defect.
+  const roundOff = round2(order.orderTotal - result.totals.subTotal)
+  if (Math.abs(roundOff) > MAX_ROUND_OFF) {
+    throw new Error(
+      `Calculated total Rs. ${result.totals.subTotal.toFixed(2)} differs from the Shopify order ` +
+        `total Rs. ${order.orderTotal.toFixed(2)} by Rs. ${Math.abs(roundOff).toFixed(2)}. ` +
+        'Check the GST rates for this order before invoicing it.',
+    )
+  }
+  const totals = { ...result.totals, grandTotal: round2(order.orderTotal), roundOff }
 
   const sellerState = stateByCode(settings.sellerStateCode)
 
@@ -163,13 +181,13 @@ export function buildInvoice(args: BuildInvoiceArgs): InvoiceSnapshot {
 
     placeOfSupply: place,
     taxKind: result.taxKind,
-    pricesIncludeGst: settings.pricesIncludeGst,
+    pricesIncludeGst,
     reverseCharge: false,
 
     lines: result.lines,
     hsnSummary: result.hsnSummary,
-    totals: result.totals,
-    amountInWords: amountInWords(result.totals.grandTotal, order.currency),
+    totals,
+    amountInWords: amountInWords(totals.grandTotal, order.currency),
 
     terms: settings.terms || undefined,
     rateTableVersion: rateTable.version,
@@ -201,6 +219,8 @@ function withShippingLine(order: NormalizedOrder, settings: AppSettings): Taxabl
       quantity: 1,
       unitPrice: shipping.amount,
       discount: shipping.discount,
+      taxRateOverride: shipping.taxRate,
+      priceIncludesTax: shipping.priceIncludesTax,
       hsnOverride: settings.shippingHsn || null,
       kind: 'SHIPPING',
     })

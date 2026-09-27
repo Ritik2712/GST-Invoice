@@ -252,6 +252,109 @@ describe('fetchOrderWithRaw', () => {
     expect((result!.raw as typeof ORDER_NODE).displayFinancialStatus).toBe('PAID')
   })
 
+  it("takes Shopify's own allocation of an order-level discount", async () => {
+    const payload = orderPayload()
+    const node = payload.data.order as Record<string, unknown>
+    // discountedTotalSet excludes order-level and code-based discounts; these arrive here.
+    node.currentTotalDiscountsSet = { shopMoney: { amount: '200.00' } }
+    ;(node.lineItems as { nodes: Array<Record<string, unknown>> }).nodes[0].discountAllocations = [
+      { allocatedAmountSet: { shopMoney: { amount: '200.00' } } },
+    ]
+
+    stubFetch([payload])
+    const result = await orders.fetchOrderWithRaw('gid://shopify/Order/1')
+
+    expect(result!.order.lines[0].discount).toBe(200)
+  })
+
+  it('reads a line-level discount off the line totals', async () => {
+    const payload = orderPayload()
+    const node = payload.data.order as Record<string, unknown>
+    // A discount applied to the line itself: Shopify reflects it in discountedTotalSet and
+    // reports the same amount again under discountAllocations.
+    const item = (node.lineItems as { nodes: Array<Record<string, unknown>> }).nodes[0]
+    item.discountedTotalSet = { shopMoney: { amount: '1000.00' } }
+    item.discountAllocations = [{ allocatedAmountSet: { shopMoney: { amount: '180.00' } } }]
+
+    stubFetch([payload])
+    const line = (await orders.fetchOrderWithRaw('gid://shopify/Order/1'))!.order.lines[0]
+
+    // 180, not 360 - the two sources describe the same discount, so they are not added.
+    expect(line.discount).toBe(180)
+  })
+
+  it('counts a line-level and an order-level discount once each, not twice', async () => {
+    const payload = orderPayload()
+    const node = payload.data.order as Record<string, unknown>
+    const item = (node.lineItems as { nodes: Array<Record<string, unknown>> }).nodes[0]
+    // 100 off the line, then 200 off the whole order. discountedTotalSet sees only the 100;
+    // discountAllocations carries both, which is why it is the one to trust.
+    item.discountedTotalSet = { shopMoney: { amount: '1080.00' } }
+    item.discountAllocations = [
+      { allocatedAmountSet: { shopMoney: { amount: '100.00' } } },
+      { allocatedAmountSet: { shopMoney: { amount: '200.00' } } },
+    ]
+    node.currentTotalDiscountsSet = { shopMoney: { amount: '300.00' } }
+
+    stubFetch([payload])
+    const line = (await orders.fetchOrderWithRaw('gid://shopify/Order/1'))!.order.lines[0]
+
+    expect(line.discount).toBe(300)
+  })
+
+  it('falls back to spreading an order-level discount only when Shopify allocated none', async () => {
+    const payload = orderPayload()
+    const node = payload.data.order as Record<string, unknown>
+    node.currentTotalDiscountsSet = { shopMoney: { amount: '200.00' } }
+
+    stubFetch([payload])
+    const result = await orders.fetchOrderWithRaw('gid://shopify/Order/1')
+
+    expect(result!.order.lines[0].discount).toBe(200)
+  })
+
+  it('never lets the fallback push a line past its own value', async () => {
+    const payload = orderPayload()
+    const node = payload.data.order as Record<string, unknown>
+    node.currentTotalDiscountsSet = { shopMoney: { amount: '99999.00' } }
+
+    stubFetch([payload])
+    const result = await orders.fetchOrderWithRaw('gid://shopify/Order/1')
+
+    const line = result!.order.lines[0]
+    expect(line.discount).toBeLessThanOrEqual(line.unitPrice * line.quantity)
+  })
+
+  it('leaves the rate to the table when Shopify charged no tax on a line', async () => {
+    const payload = orderPayload()
+    const node = payload.data.order as Record<string, unknown>
+    node.taxesIncluded = false
+    ;(node.lineItems as { nodes: Array<Record<string, unknown>> }).nodes[0].taxLines = []
+
+    stubFetch([payload])
+    const line = (await orders.fetchOrderWithRaw('gid://shopify/Order/1'))!.order.lines[0]
+
+    // An empty tax list is "Shopify charged nothing", not "the rate is 0%".
+    expect(line.taxRateOverride).toBeUndefined()
+    // The customer paid this amount and nothing more, so tax comes out of it.
+    expect(line.priceIncludesTax).toBe(true)
+  })
+
+  it('sums the CGST and SGST tax lines into one rate', async () => {
+    const payload = orderPayload()
+    const node = payload.data.order as Record<string, unknown>
+    ;(node.lineItems as { nodes: Array<Record<string, unknown>> }).nodes[0].taxLines = [
+      { rate: 0.025 },
+      { rate: 0.025 },
+    ]
+
+    stubFetch([payload])
+    const line = (await orders.fetchOrderWithRaw('gid://shopify/Order/1'))!.order.lines[0]
+
+    expect(line.taxRateOverride).toBe(5)
+    expect(line.priceIncludesTax).toBeUndefined()
+  })
+
   it('reports which optional blocks were available', async () => {
     stubFetch([orderPayload()])
     expect((await orders.fetchOrderWithRaw('gid://shopify/Order/1'))!.blocks).toEqual({

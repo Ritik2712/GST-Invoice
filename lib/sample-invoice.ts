@@ -156,6 +156,7 @@ export function sampleOrder(placeOfSupplyStateCode: string): NormalizedOrder {
       },
     ],
     shipping: { amount: 118, discount: 0, title: 'Standard shipping' },
-    orderTotal: 3208,
+    // What the sample lines actually add up to: (1180 x 2 - 100) + 590 + 250 + 118.
+    orderTotal: 3218,
   }
 }

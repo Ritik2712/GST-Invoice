@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildInvoice, checkInvoiceability, prefixFor, seriesFor } from './invoice'
+import { round2 } from './money'
 import { resolvePlaceOfSupply } from './placeOfSupply'
 import { DEFAULT_SETTINGS, validateSettings, type AppSettings } from './settings'
 import { stateFromShopifyAddress } from './states'
@@ -128,6 +129,51 @@ describe('invoiceability', () => {
 })
 
 describe('buildInvoice', () => {
+  it("preserves Shopify's paise-level total for a discounted order", () => {
+    const invoice = buildInvoice({
+      order: order({
+        pricesIncludeGst: false,
+        lines: [
+          { id: '1', title: 'A', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          { id: '2', title: 'B', quantity: 1, unitPrice: 550, discount: 384.42, taxRateOverride: 5 },
+          { id: '3', title: 'C', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          { id: '4', title: 'D', quantity: 1, unitPrice: 500, discount: 349.47, taxRateOverride: 5 },
+          { id: '5', title: 'E', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+        ],
+        // Shopify charged no tax on freight, so the 80 paid is read as the gross.
+        shipping: { amount: 80, discount: 0, title: 'Standard', priceIncludesTax: true },
+        orderTotal: 980.9,
+      }),
+      settings,
+      rateTable,
+      invoiceNumber: 'AD/26-27/101',
+      series: 'REAL',
+      financialYear: '2026-27',
+      sequence: 101,
+      issuedAt: new Date('2026-09-27T00:00:00Z'),
+    })
+
+    expect(invoice.lines[0]).toMatchObject({ unitTaxableValue: 600, taxableValue: 180.63, cgst: 4.52, sgst: 4.52 })
+    expect(invoice.totals).toMatchObject({ grandTotal: 980.9, roundOff: -0.02 })
+    // The invoice is issued for what the customer paid, to the paisa.
+    expect(round2(invoice.totals.subTotal + invoice.totals.roundOff)).toBe(980.9)
+  })
+
+  it('refuses to hide a real disagreement with Shopify under "round off"', () => {
+    expect(() =>
+      buildInvoice({
+        order: order({ lines: [{ id: '1', title: 'A', quantity: 1, unitPrice: 1180, discount: 0 }], orderTotal: 900 }),
+        settings,
+        rateTable,
+        invoiceNumber: 'AD/26-27/102',
+        series: 'REAL',
+        financialYear: '2026-27',
+        sequence: 102,
+        issuedAt: new Date('2026-09-27T00:00:00Z'),
+      }),
+    ).toThrow(/differs from the Shopify order total/)
+  })
+
   const invoice = buildInvoice({
     order: order(),
     settings,

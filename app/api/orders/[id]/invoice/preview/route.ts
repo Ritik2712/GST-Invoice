@@ -1,6 +1,7 @@
 import { type NextRequest } from 'next/server'
 
 import { errorResponse, orderGid } from '@/lib/api'
+import { allowsRefreshPreview } from '@/lib/local-only'
 import type { AppSettings } from '@/lib/gst/settings'
 import { previewInvoiceForOrder } from '@/lib/invoice-service'
 
@@ -25,8 +26,13 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
   try {
     const { id } = await context.params
     const shipping = request.nextUrl.searchParams.get('shipping')
+    // Ignored off this machine: a stored invoice must render the same way for everyone.
+    const refresh =
+      request.nextUrl.searchParams.get('refresh') === '1' &&
+      allowsRefreshPreview(request.nextUrl.hostname)
     const { invoice, pdf } = await previewInvoiceForOrder(orderGid(id), {
       shippingTreatment: isTreatment(shipping) ? shipping : null,
+      refresh,
     })
     const download = request.nextUrl.searchParams.get('download') === '1'
 

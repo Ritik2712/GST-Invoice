@@ -116,6 +116,8 @@ export async function getOrIssueInvoice(orderId: string): Promise<IssueResult> {
 export interface PreviewOverrides {
   /** Try a different delivery treatment without saving it to Settings. */
   shippingTreatment?: AppSettings['shippingTreatment'] | null
+  /** Rebuild from the latest Shopify order while preserving an existing invoice number. */
+  refresh?: boolean
 }
 
 export async function previewInvoiceForOrder(
@@ -123,7 +125,7 @@ export async function previewInvoiceForOrder(
   overrides: PreviewOverrides = {},
 ): Promise<IssueResult> {
   const existing = await store.getInvoiceForOrder(orderId)
-  if (existing) {
+  if (existing && !overrides.refresh) {
     return { invoice: existing, pdf: await renderInvoicePdf(existing), created: false }
   }
 
@@ -141,17 +143,18 @@ export async function previewInvoiceForOrder(
   const check = checkInvoiceability(order, isSettingsComplete(settings))
   if (!check.invoiceable) throw new InvoiceError(check.message, check.reason, 409)
 
-  const issuedAt = new Date()
-  const financialYear = financialYearKeyIst(issuedAt)
+  const issuedAt = existing ? new Date(existing.issuedAt) : new Date()
+  const financialYear = existing?.financialYear ?? financialYearKeyIst(issuedAt)
   const series = seriesFor(order)
-  const sequence = (await store.getLastIssued(series, financialYear)) + 1
+  const sequence = existing?.sequence ?? (await store.getLastIssued(series, financialYear)) + 1
 
   const invoice = buildInvoice({
     order,
     settings,
     rateTable: effectiveRateTable(rawTable, settings),
     series,
-    invoiceNumber: formatInvoiceNumber(prefixFor(series, settings), financialYear, sequence),
+    invoiceNumber:
+      existing?.invoiceNumber ?? formatInvoiceNumber(prefixFor(series, settings), financialYear, sequence),
     financialYear,
     sequence,
     issuedAt,

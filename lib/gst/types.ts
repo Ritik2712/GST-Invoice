@@ -42,6 +42,14 @@ export interface TaxableLineInput {
   unitPrice: number
   /** Total discount allocated to this line (all units). */
   discount: number
+  /** Tax rate reported by Shopify for this line, when available. */
+  taxRateOverride?: number
+  /**
+   * Treat this line's charged amount as tax-inclusive regardless of the order-level basis.
+   * Set when Shopify collected no tax on the line: the customer paid this amount and nothing
+   * more, so any tax we are obliged to charge has to come out of it rather than on top.
+   */
+  priceIncludesTax?: boolean
   /** Marks the shipping/freight pseudo-line so shipping rules can apply. */
   kind?: 'GOODS' | 'SHIPPING'
   /**
@@ -107,6 +115,8 @@ export interface CalcLine {
   quantity: number
   /** Per-unit taxable value, exclusive of GST. */
   unitTaxableValue: number
+  /** Original line amount before any discount, in Shopify's displayed pricing basis. */
+  grossValue: number
   /** Line taxable value after discount, exclusive of GST. */
   taxableValue: number
   discount: number
@@ -206,7 +216,15 @@ export interface NormalizedOrder {
   shippingAddress?: PartyAddress | null
   customerDefaultAddress?: PartyAddress | null
   lines: TaxableLineInput[]
-  shipping: { amount: number; discount: number; title: string } | null
+  shipping: {
+    amount: number
+    discount: number
+    title: string
+    taxRate?: number
+    priceIncludesTax?: boolean
+  } | null
+  /** Whether Shopify added tax on top of its listed prices for this order. */
+  pricesIncludeGst?: boolean
   /** Order total as Shopify reports it, kept for reconciliation on the invoice. */
   orderTotal: number
 }

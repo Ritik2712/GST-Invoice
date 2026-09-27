@@ -68,6 +68,58 @@ describe('discounts, shipping and totals', () => {
     )
     expect(lines[0].taxableValue).toBe(800)
     expect(lines[0].discount).toBe(200)
+    expect(lines[0].unitTaxableValue).toBe(500)
+  })
+
+  it('keeps the original unit price while applying Shopify tax rates and discounts', () => {
+    const result = calculate(
+      base({
+        pricesIncludeGst: false,
+        lines: [
+          { id: '1', title: 'A', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          { id: '2', title: 'B', quantity: 1, unitPrice: 550, discount: 384.42, taxRateOverride: 5 },
+          { id: '3', title: 'C', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          { id: '4', title: 'D', quantity: 1, unitPrice: 500, discount: 349.47, taxRateOverride: 5 },
+          { id: '5', title: 'E', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          // Shopify charged no tax on freight, so the 80 the customer paid is the gross.
+          { id: 'shipping', title: 'Shipping', quantity: 1, unitPrice: 80, discount: 0, priceIncludesTax: true, kind: 'SHIPPING' },
+        ],
+      }),
+    )
+
+    expect(result.lines[0].unitTaxableValue).toBe(600)
+    expect(result.lines[0].taxableValue).toBe(180.63)
+    // Freight stays an 18% service, but carved out of the 80 rather than added on top of it.
+    expect(result.lines[5]).toMatchObject({ rate: 18, taxableValue: 67.8, total: 80 })
+    expect(result.totals).toMatchObject({ taxableValue: 925.8, cgst: 27.56, sgst: 27.56, subTotal: 980.92 })
+  })
+
+  it('records that a rate came from Shopify rather than from the table', () => {
+    const { lines } = calculate(
+      base({ lines: [{ id: '1', title: 'A', quantity: 1, unitPrice: 1050, discount: 0, taxRateOverride: 5 }] }),
+    )
+    expect(lines[0]).toMatchObject({ rate: 5, rateSource: 'shopify-tax-line' })
+  })
+
+  it('splits CGST and SGST equally on every line, each honest against the printed rate', () => {
+    const { lines, totals } = calculate(
+      base({
+        pricesIncludeGst: false,
+        lines: [
+          { id: '1', title: 'A', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          { id: '2', title: 'B', quantity: 1, unitPrice: 550, discount: 384.42, taxRateOverride: 5 },
+          // Same price and discount as line 1, so it must land on the same split.
+          { id: '3', title: 'C', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+        ],
+      }),
+    )
+
+    for (const line of lines) {
+      expect(line.cgst).toBe(line.sgst)
+      expect(line.cgst).toBe(round2((line.taxableValue * line.rate) / 200))
+    }
+    expect(lines[0].cgst).toBe(lines[2].cgst)
+    expect(totals.cgst).toBe(totals.sgst)
   })
 
   it('COMPOSITE_LINE taxes shipping at the predominant goods rate', () => {

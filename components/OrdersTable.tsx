@@ -22,6 +22,7 @@ import {
 import React, { useCallback, useEffect, useState } from 'react'
 
 import { formatInr } from '@/lib/gst/money'
+import { allowsRefreshPreview } from '@/lib/local-only'
 import type { OrderRow, OrdersResponse } from '@/lib/order-rows'
 
 type Cursor = { after?: string | null; before?: string | null }
@@ -40,7 +41,8 @@ const PAGE_SIZE = 25
 const inlineUrl = (key: string) => `/api/invoices/${key}/pdf?disposition=inline`
 const downloadUrl = (key: string) => `/api/invoices/${key}/pdf`
 /** Dry run for an order with no invoice yet - renders, but allots no number. */
-const previewUrl = (legacyId: string) => `/api/orders/${legacyId}/invoice/preview`
+const previewUrl = (legacyId: string, refresh = false) =>
+  `/api/orders/${legacyId}/invoice/preview${refresh ? '?refresh=1' : ''}`
 
 export function OrdersTable() {
   const [data, setData] = useState<OrdersResponse | null>(null)
@@ -104,6 +106,15 @@ export function OrdersTable() {
   const handlePreview = useCallback((row: OrderRow) => {
     window.open(previewUrl(row.legacyId), '_blank', 'noopener')
   }, [])
+
+  const handleUpdatedPreview = useCallback((row: OrderRow) => {
+    window.open(previewUrl(row.legacyId, true), '_blank', 'noopener')
+  }, [])
+
+  // Read after mount rather than during render: the server has no hostname to check, so
+  // deciding here would hydrate against a different answer than the one it sent.
+  const [canRefresh, setCanRefresh] = useState(false)
+  useEffect(() => setCanRefresh(allowsRefreshPreview(window.location.hostname)), [])
 
   const handleView = useCallback((row: OrderRow) => {
     if (row.invoiceNumber && row.invoiceKey) {
@@ -265,9 +276,16 @@ export function OrdersTable() {
                   )}
                 </IndexTable.Cell>
                 <IndexTable.Cell>
-                  <Text as="span" alignment="end" numeric>
-                    {formatInr(row.total)}
-                  </Text>
+                  <BlockStack gap="050" inlineAlign="end">
+                    {row.discount > 0 ? (
+                      <Text as="span" tone="subdued" variant="bodySm">
+                        Discount: -{formatInr(row.discount)}
+                      </Text>
+                    ) : null}
+                    <Text as="span" alignment="end" numeric>
+                      {formatInr(row.total)}
+                    </Text>
+                  </BlockStack>
                 </IndexTable.Cell>
                 <IndexTable.Cell>
                   <InvoiceStatus row={row} />
@@ -280,6 +298,7 @@ export function OrdersTable() {
                     onDownload={handleDownload}
                     onGenerate={handleGenerate}
                     onPreview={handlePreview}
+                    onUpdatedPreview={canRefresh ? handleUpdatedPreview : null}
                     onAskCancel={handleAskCancel}
                   />
                 </IndexTable.Cell>
@@ -358,6 +377,7 @@ function RowActions({
   onDownload,
   onGenerate,
   onPreview,
+  onUpdatedPreview,
   onAskCancel,
 }: {
   row: OrderRow
@@ -366,6 +386,8 @@ function RowActions({
   onDownload: (row: OrderRow) => void
   onGenerate: (row: OrderRow) => void
   onPreview: (row: OrderRow) => void
+  /** Null off this machine, where the refresh preview is not offered. */
+  onUpdatedPreview: ((row: OrderRow) => void) | null
   onAskCancel: (row: OrderRow) => void
 }) {
   // A live invoice: view, download, or cancel it and reissue.
@@ -373,6 +395,9 @@ function RowActions({
     return (
       <ButtonGroup variant="segmented">
         <Button onClick={() => onView(row)}>View</Button>
+        {onUpdatedPreview && (
+          <Button onClick={() => onUpdatedPreview(row)}>View updated</Button>
+        )}
         <Button onClick={() => onDownload(row)}>Download</Button>
         <Tooltip content="Cancel this invoice and issue a corrected one under the next number">
           <Button tone="critical" onClick={() => onAskCancel(row)}>

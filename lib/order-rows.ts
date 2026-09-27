@@ -15,6 +15,7 @@ export interface OrderRow {
   customerName: string
   placeOfSupply: { code: string; name: string } | null
   total: number
+  discount: number
   currency: string
   financialStatus: FinancialStatus
   isTest: boolean
@@ -144,6 +145,8 @@ function base(order: NormalizedOrder, place: ReturnType<typeof resolvePlaceOfSup
     customerName: order.customerName ?? '-',
     placeOfSupply: place ? { code: place.stateCode, name: place.stateName } : null,
     total: order.orderTotal,
+    discount: order.lines.reduce((total, line) => total + line.discount, 0) +
+      (order.shipping?.discount ?? 0),
     currency: order.currency,
     financialStatus: order.financialStatus,
     isTest: order.isTest,
