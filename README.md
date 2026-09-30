@@ -405,11 +405,25 @@ before a shirt rule existed. `hsnExplanation` says the same thing in a sentence.
 
 ### Rounding
 
-All money is rounded half-up to two decimals in one place (`lib/gst/money.ts`). Tax is
-computed per line, the grand total is rounded to the nearest rupee, and the difference is
-printed as a **Round off** row.
+The invoice is issued for exactly what the customer paid, so each line's tax is fixed by
+money that actually changed hands rather than re-derived:
 
----
+- **Shopify charged tax on the line** - the invoice prints that amount, to the paisa.
+  Shopify taxes the order and then allocates the tax across lines, so two identical lines
+  can carry 9.02 and 9.04; recomputing each line would land a paisa either side and leave a
+  round-off the customer never paid.
+- **Price includes tax, Shopify charged none** (e.g. delivery) - the taxable value is carved
+  out of the amount paid and the tax is the remainder, so the two add back exactly
+  (Rs.80 at 18% -> 67.80 + 12.20).
+- **Price excludes tax** - tax is rate x taxable value, rounded once.
+
+A line's tax is then split once: CGST takes the rounded half and SGST the rest, so the heads
+always add up to the line's tax. With an odd paisa one head is a paisa more than the other
+(9.03 -> 4.52 + 4.51). Rounding each half on its own would round twice and drift.
+
+The grand total is the Shopify order total. A **Round off** row appears only for a genuine
+paisa-level gap, and anything over Rs.0.50 refuses to issue - that is a rate problem, not
+rounding. An issued invoice keeps the rounding it was issued with.
 
 ## Commands
 

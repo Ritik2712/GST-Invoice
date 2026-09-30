@@ -187,16 +187,36 @@ function buildLine(
   // obliged to charge has to be carved out of that amount rather than added on top.
   const inclusive = line.priceIncludesTax ?? pricesIncludeGst
   const grossAfterDiscount = round2(line.unitPrice * line.quantity - line.discount)
-  const taxableValue = taxableValueOf(grossAfterDiscount, resolved.rate, inclusive)
   const unitTaxableValue = taxableValueOf(line.unitPrice, resolved.rate, inclusive)
+
+  // Freight folded in by APPORTION is not covered by what Shopify charged on the goods, so
+  // such a line is taxed from its rate instead.
+  const charged = line.apportionedShipping ? undefined : line.taxAmountCharged
+
+  let taxableValue: number
+  let tax: number
+  if (charged !== undefined) {
+    // Shopify collected exactly this, so the invoice records it rather than re-deriving it.
+    tax = charged
+    taxableValue = inclusive ? round2(grossAfterDiscount - charged) : grossAfterDiscount
+  } else if (inclusive) {
+    // The customer paid a fixed amount. Split it, and let tax take the remainder, so the
+    // taxable value and the tax add back to exactly what was paid.
+    taxableValue = taxableValueOf(grossAfterDiscount, resolved.rate, true)
+    tax = round2(grossAfterDiscount - taxableValue)
+  } else {
+    taxableValue = grossAfterDiscount
+    tax = round2((taxableValue * resolved.rate) / 100)
+  }
   const cess = round2((taxableValue * resolved.cess) / 100)
 
-  // CGST and SGST are each half the rate applied to the same value (s.9(1) CGST Act read
-  // with the SGST Acts), so each half is rounded on its own. Deriving one from the other
-  // would put a paisa on one head that the printed rate cannot account for.
-  const cgst = taxKind === 'INTRA_STATE' ? round2((taxableValue * resolved.rate) / 200) : 0
-  const sgst = cgst
-  const igst = taxKind === 'INTER_STATE' ? round2((taxableValue * resolved.rate) / 100) : 0
+  // The line's tax is rounded once and then split: CGST takes the rounded half, SGST the rest,
+  // so the heads always add up to the tax on the line. With an odd paisa one head is a paisa
+  // more than the other (9.03 -> 4.52 + 4.51). Rounding each half on its own rounds twice,
+  // drifts from what was collected, and leaves a round-off the customer never paid.
+  const cgst = taxKind === 'INTRA_STATE' ? round2(tax / 2) : 0
+  const sgst = taxKind === 'INTRA_STATE' ? round2(tax - cgst) : 0
+  const igst = taxKind === 'INTER_STATE' ? tax : 0
 
   return {
     id: line.id,

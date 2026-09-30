@@ -45,6 +45,12 @@ export interface TaxableLineInput {
   /** Tax rate reported by Shopify for this line, when available. */
   taxRateOverride?: number
   /**
+   * Tax Shopify actually charged on this whole line, after discounts. When present the
+   * invoice prints exactly this: Shopify taxes the order and allocates the tax across lines,
+   * so re-deriving it per line can drift by a paisa and leave a round-off nobody paid.
+   */
+  taxAmountCharged?: number
+  /**
    * Treat this line's charged amount as tax-inclusive regardless of the order-level basis.
    * Set when Shopify collected no tax on the line: the customer paid this amount and nothing
    * more, so any tax we are obliged to charge has to come out of it rather than on top.
@@ -221,6 +227,7 @@ export interface NormalizedOrder {
     discount: number
     title: string
     taxRate?: number
+    taxAmountCharged?: number
     priceIncludesTax?: boolean
   } | null
   /** Whether Shopify added tax on top of its listed prices for this order. */

@@ -91,7 +91,9 @@ describe('discounts, shipping and totals', () => {
     expect(result.lines[0].taxableValue).toBe(180.63)
     // Freight stays an 18% service, but carved out of the 80 rather than added on top of it.
     expect(result.lines[5]).toMatchObject({ rate: 18, taxableValue: 67.8, total: 80 })
-    expect(result.totals).toMatchObject({ taxableValue: 925.8, cgst: 27.56, sgst: 27.56, subTotal: 980.92 })
+    // Each line's tax is rounded once (9.03, 8.28, 9.03, 7.53, 9.03 = 42.90), so the invoice
+    // lands on the 980.90 the customer paid instead of 980.92.
+    expect(result.totals).toMatchObject({ taxableValue: 925.8, cgst: 27.57, sgst: 27.53, subTotal: 980.9 })
   })
 
   it('records that a rate came from Shopify rather than from the table', () => {
@@ -101,7 +103,7 @@ describe('discounts, shipping and totals', () => {
     expect(lines[0]).toMatchObject({ rate: 5, rateSource: 'shopify-tax-line' })
   })
 
-  it('splits CGST and SGST equally on every line, each honest against the printed rate', () => {
+  it('rounds each line once, then splits it so the two heads add up to that tax', () => {
     const { lines, totals } = calculate(
       base({
         pricesIncludeGst: false,
@@ -115,11 +117,55 @@ describe('discounts, shipping and totals', () => {
     )
 
     for (const line of lines) {
-      expect(line.cgst).toBe(line.sgst)
-      expect(line.cgst).toBe(round2((line.taxableValue * line.rate) / 200))
+      expect(round2(line.cgst + line.sgst)).toBe(round2((line.taxableValue * line.rate) / 100))
+      expect(Math.abs(round2(line.cgst - line.sgst))).toBeLessThanOrEqual(0.01)
     }
+    // 180.63 x 5% = 9.0315 -> 9.03, an odd paisa: CGST takes the rounded half, SGST the rest.
+    expect(lines[0]).toMatchObject({ cgst: 4.52, sgst: 4.51 })
+    // Same inputs, same split.
     expect(lines[0].cgst).toBe(lines[2].cgst)
-    expect(totals.cgst).toBe(totals.sgst)
+    expect(round2(totals.cgst + totals.sgst)).toBe(round2(totals.taxTotal - totals.igst - totals.cess))
+  })
+
+  it("prints the tax Shopify actually charged on a line, to the paisa", () => {
+    // Shopify taxes the order and allocates the tax across lines, so two identical lines can
+    // carry 9.02 and 9.04. The invoice records what was collected, not a re-derivation.
+    const { lines } = calculate(
+      base({
+        pricesIncludeGst: false,
+        lines: [
+          { id: '1', title: 'A', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5, taxAmountCharged: 9.02 },
+          { id: '2', title: 'B', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5, taxAmountCharged: 9.04 },
+        ],
+      }),
+    )
+    expect(lines[0]).toMatchObject({ taxableValue: 180.63, cgst: 4.51, sgst: 4.51, total: 189.65 })
+    expect(lines[1]).toMatchObject({ taxableValue: 180.63, cgst: 4.52, sgst: 4.52, total: 189.67 })
+  })
+
+  it('carves tax out of a tax-inclusive amount so the line adds back to what was paid', () => {
+    // 100 at 18%: 84.75 taxable. Rounding the tax separately would give 15.26 and a line of
+    // 100.01; taking tax as the remainder keeps it at exactly 100.
+    const { lines } = calculate(
+      base({ pricesIncludeGst: true, lines: [{ id: '1', title: 'A', quantity: 1, unitPrice: 100, discount: 0 }] }),
+    )
+    expect(lines[0]).toMatchObject({ taxableValue: 84.75, cgst: 7.63, sgst: 7.62, total: 100 })
+  })
+
+  it("ignores Shopify's charged amount on a line that APPORTION has folded freight into", () => {
+    // What Shopify charged covered the goods only; the freight share has to be taxed too.
+    const { lines } = calculate(
+      base({
+        pricesIncludeGst: false,
+        shippingTreatment: 'APPORTION',
+        lines: [
+          { id: '1', title: 'A', quantity: 1, unitPrice: 100, discount: 0, taxRateOverride: 5, taxAmountCharged: 5 },
+          { id: 'shipping', title: 'Shipping', quantity: 1, unitPrice: 20, discount: 0, kind: 'SHIPPING' },
+        ],
+      }),
+    )
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ taxableValue: 120, cgst: 3, sgst: 3 })
   })
 
   it('COMPOSITE_LINE taxes shipping at the predominant goods rate', () => {

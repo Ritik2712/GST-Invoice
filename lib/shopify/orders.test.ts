@@ -374,3 +374,39 @@ describe('fetchOrderWithRaw', () => {
     expect(await orders.fetchOrderWithRaw('gid://shopify/Order/999')).toBeNull()
   })
 })
+
+describe('tax Shopify charged', () => {
+  it('carries the charged amount for lines and for freight', async () => {
+    const node: any = structuredClone(ORDER_NODE)
+    node.lineItems.nodes[0].taxLines = [
+      { rate: 0.025, priceSet: { shopMoney: { amount: '4.51' } } },
+      { rate: 0.025, priceSet: { shopMoney: { amount: '4.51' } } },
+    ]
+    node.shippingLines = {
+      nodes: [
+        {
+          title: 'Standard',
+          originalPriceSet: { shopMoney: { amount: '80.00' } },
+          discountedPriceSet: { shopMoney: { amount: '80.00' } },
+          taxLines: [{ rate: 0.18, priceSet: { shopMoney: { amount: '12.20' } } }],
+        },
+      ],
+    }
+    stubFetch([
+      { data: { orders: { pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null }, nodes: [node] } } },
+    ])
+
+    const order = (await orders.fetchOrders()).orders[0]
+    expect(order.lines[0]).toMatchObject({ taxRateOverride: 5, taxAmountCharged: 9.02 })
+    expect(order.shipping).toMatchObject({ taxRate: 18, taxAmountCharged: 12.2 })
+  })
+
+  it('leaves the amount unset when Shopify charged no tax', async () => {
+    const node: any = structuredClone(ORDER_NODE)
+    node.lineItems.nodes[0].taxLines = []
+    stubFetch([
+      { data: { orders: { pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null }, nodes: [node] } } },
+    ])
+    expect((await orders.fetchOrders()).orders[0].lines[0].taxAmountCharged).toBeUndefined()
+  })
+})

@@ -220,6 +220,7 @@ function withShippingLine(order: NormalizedOrder, settings: AppSettings): Taxabl
       unitPrice: shipping.amount,
       discount: shipping.discount,
       taxRateOverride: shipping.taxRate,
+      taxAmountCharged: shipping.taxAmountCharged,
       priceIncludesTax: shipping.priceIncludesTax,
       hsnOverride: settings.shippingHsn || null,
       kind: 'SHIPPING',

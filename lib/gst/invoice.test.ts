@@ -153,10 +153,40 @@ describe('buildInvoice', () => {
       issuedAt: new Date('2026-09-27T00:00:00Z'),
     })
 
-    expect(invoice.lines[0]).toMatchObject({ unitTaxableValue: 600, taxableValue: 180.63, cgst: 4.52, sgst: 4.52 })
-    expect(invoice.totals).toMatchObject({ grandTotal: 980.9, roundOff: -0.02 })
+    expect(invoice.lines[0]).toMatchObject({ unitTaxableValue: 600, taxableValue: 180.63, cgst: 4.52, sgst: 4.51 })
+    // Rounding each line once lands exactly on what was paid - no round-off row.
+    expect(invoice.totals).toMatchObject({ grandTotal: 980.9, roundOff: 0 })
     // The invoice is issued for what the customer paid, to the paisa.
     expect(round2(invoice.totals.subTotal + invoice.totals.roundOff)).toBe(980.9)
+  })
+
+  it("needs no round-off when it prints Shopify's own per-line tax", () => {
+    // Order #1009 exactly as Shopify allocated it: identical 180.63 lines taxed 9.02 and 9.04.
+    const amounts = [9.02, 8.28, 9.04, 7.52, 9.04]
+    const invoice = buildInvoice({
+      order: order({
+        pricesIncludeGst: false,
+        lines: [
+          { id: '1', title: 'A', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          { id: '2', title: 'B', quantity: 1, unitPrice: 550, discount: 384.43, taxRateOverride: 5 },
+          { id: '3', title: 'C', quantity: 1, unitPrice: 600, discount: 419.37, taxRateOverride: 5 },
+          { id: '4', title: 'D', quantity: 1, unitPrice: 500, discount: 349.47, taxRateOverride: 5 },
+          { id: '5', title: 'E', quantity: 1, unitPrice: 600, discount: 419.36, taxRateOverride: 5 },
+        ].map((line, i) => ({ ...line, taxAmountCharged: amounts[i] })),
+        shipping: { amount: 80, discount: 0, title: 'Standard', priceIncludesTax: true },
+        orderTotal: 980.9,
+      }),
+      settings,
+      rateTable,
+      invoiceNumber: 'AD/26-27/102',
+      series: 'REAL',
+      financialYear: '2026-27',
+      sequence: 102,
+      issuedAt: new Date('2026-09-27T00:00:00Z'),
+    })
+
+    expect(invoice.lines.slice(0, 5).map((l) => round2(l.cgst + l.sgst))).toEqual(amounts)
+    expect(invoice.totals).toMatchObject({ grandTotal: 980.9, roundOff: 0, taxTotal: 55.1 })
   })
 
   it('refuses to hide a real disagreement with Shopify under "round off"', () => {

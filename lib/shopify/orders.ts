@@ -125,6 +125,11 @@ const orderFields = ({ customer, inventory }: OptionalBlocks) => /* GraphQL */ `
         }
         taxLines {
           rate
+          priceSet {
+            shopMoney {
+              amount
+            }
+          }
         }
         discountAllocations {
           allocatedAmountSet {
@@ -160,6 +165,11 @@ const orderFields = ({ customer, inventory }: OptionalBlocks) => /* GraphQL */ `
         }
         taxLines {
           rate
+          priceSet {
+            shopMoney {
+              amount
+            }
+          }
         }
         discountAllocations {
           allocatedAmountSet {
@@ -231,6 +241,11 @@ interface RawAddress {
   phone?: string | null
 }
 
+interface RawTaxLine {
+  rate?: number | null
+  priceSet?: { shopMoney: { amount: string } } | null
+}
+
 interface RawDiscountAllocation {
   allocatedAmountSet?: { shopMoney: { amount: string } } | null
 }
@@ -266,7 +281,7 @@ interface RawOrder {
       title?: string | null
       originalPriceSet?: { shopMoney: { amount: string } } | null
       discountedPriceSet?: { shopMoney: { amount: string } } | null
-      taxLines?: Array<{ rate?: number | null }> | null
+      taxLines?: RawTaxLine[] | null
       discountAllocations?: RawDiscountAllocation[] | null
     }>
   }
@@ -281,7 +296,7 @@ interface RawOrder {
       originalUnitPriceSet: { shopMoney: { amount: string } }
       discountedTotalSet: { shopMoney: { amount: string } }
       originalTotalSet: { shopMoney: { amount: string } }
-      taxLines?: Array<{ rate?: number | null }> | null
+      taxLines?: RawTaxLine[] | null
       discountAllocations?: RawDiscountAllocation[] | null
       variant?: { inventoryItem?: { harmonizedSystemCode?: string | null } | null } | null
       product?: {
@@ -407,6 +422,22 @@ function taxRate(taxLines: Array<{ rate?: number | null }> | null | undefined): 
 }
 
 /** The rate charged on freight. Shipping lines carry the same rate, so summing them would double it. */
+/**
+ * What Shopify actually charged on a line, its tax lines summed. The invoice records this
+ * rather than re-deriving it: Shopify taxes the order and then allocates that tax across
+ * lines, so a per-line recalculation can land a paisa either side of it - and the invoice has
+ * to add up to what the customer paid.
+ */
+function taxAmount(taxLines: RawTaxLine[] | null | undefined): number | undefined {
+  if (!taxLines || taxLines.length === 0) return undefined
+  return round2(taxLines.reduce((total, line) => total + money(line.priceSet?.shopMoney.amount), 0))
+}
+
+function shippingTaxAmount(nodes: Array<{ taxLines?: RawTaxLine[] | null }>): number | undefined {
+  const amounts = nodes.map((node) => taxAmount(node.taxLines)).filter((a): a is number => a !== undefined)
+  return amounts.length ? round2(amounts.reduce((total, amount) => total + amount, 0)) : undefined
+}
+
 function shippingTaxRate(nodes: Array<{ taxLines?: Array<{ rate?: number | null }> | null }>): number | undefined {
   const rates = nodes.map((node) => taxRate(node.taxLines)).filter((rate): rate is number => rate !== undefined)
   return rates.length === 0 ? undefined : Math.max(...rates)
@@ -527,6 +558,7 @@ export function normalizeOrder(raw: RawOrder): NormalizedOrder {
         ),
       ),
       taxRateOverride: taxRate(item.taxLines),
+      taxAmountCharged: taxAmount(item.taxLines),
       priceIncludesTax: chargedTaxFree(item.taxLines),
       kind: 'GOODS',
     }
@@ -604,6 +636,7 @@ export function normalizeOrder(raw: RawOrder): NormalizedOrder {
             discount: shippingDiscount,
             title: shippingNodes[0]?.title || 'Shipping',
             taxRate: shippingTaxRate(shippingNodes),
+            taxAmountCharged: shippingTaxAmount(shippingNodes),
             priceIncludesTax: chargedTaxFree(shippingNodes.flatMap((node) => node.taxLines ?? [])),
           }
         : null,
