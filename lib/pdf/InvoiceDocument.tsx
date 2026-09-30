@@ -367,7 +367,7 @@ export function InvoiceDocument({
                 styles.right,
               ]}
             >
-              Unit
+              Unit price
             </Text>
             {showDiscount && (
               <Text
